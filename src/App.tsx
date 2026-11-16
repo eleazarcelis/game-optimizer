@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -12,6 +13,7 @@ import { ConfirmationDialog } from "./components/ConfirmationDialog";
 import { WindowControls } from "./components/WindowControls";
 import { containsPath, initialState, isAppState, isExe, type AppState } from "./model";
 import { profileName, translate as t } from "./i18n";
+import { checkForUpdates, type UpdateStatus } from "./updates";
 import "./App.css";
 
 type AppError = { code?: string; message?: string };
@@ -28,6 +30,11 @@ function App() {
   const stateRef = useRef<AppState | undefined>(undefined);
   const pendingWrites = useRef<Promise<void>>(Promise.resolve());
   const [page, setPage] = useState<"library" | "settings" | "global">("library");
+  const [aboutRequest, setAboutRequest] = useState(0);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ kind: "idle" });
+  const [updateNotification, setUpdateNotification] = useState(false);
+  const updateCheckInFlight = useRef(false);
+  const startupUpdateCheckDone = useRef(false);
   const [error, setError] = useState("");
   const [loadFailed, setLoadFailed] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
@@ -79,6 +86,29 @@ function App() {
     );
     void pendingWrites.current.catch(() => undefined);
   }, []);
+
+  const checkUpdates = useCallback(async (automatic: boolean) => {
+    if (updateCheckInFlight.current) return;
+    updateCheckInFlight.current = true;
+    setUpdateStatus({ kind: "checking" });
+    setUpdateNotification(false);
+    try {
+      const result = await checkForUpdates(await getVersion());
+      setUpdateStatus(result ? { kind: "available", ...result } : { kind: "current" });
+      if (automatic && result && stateRef.current?.automaticUpdateChecks === true) setUpdateNotification(true);
+    } catch (e) {
+      setUpdateStatus({ kind: "failed" });
+      showError({ code: "UPDATE_CHECK", message: `${t(stateRef.current?.language ?? "en", "updateCheckFailed")} ${errorText(e)}` });
+    } finally {
+      updateCheckInFlight.current = false;
+    }
+  }, [showError]);
+
+  useEffect(() => {
+    if (!state || startupUpdateCheckDone.current) return;
+    startupUpdateCheckDone.current = true;
+    if (state.automaticUpdateChecks === true) void checkUpdates(true);
+  }, [state, checkUpdates]);
 
   useEffect(() => {
     let active = true;
@@ -153,10 +183,11 @@ function App() {
   const errorNotification = error && <div className="toast" role="alert"><AlertCircle size={20}/><div className="toast-message scroll-panel"><strong>{t(lang, "error")}</strong><p>{error}</p></div><button className="icon-button" onClick={() => setError("")} title={t(lang, "close")} aria-label={t(lang, "close")}>×</button></div>;
   if (!state) return <><WindowControls language={lang} showError={showError}/><div className="loading">{loadFailed ? <div className="load-failed"><p>{t(lang, "dataUnavailable")}</p><button className="secondary" onClick={() => { setError(""); setLoadFailed(false); setLoadAttempt((attempt) => attempt + 1); }}>{t(lang, "retry")}</button></div> : <><LoaderCircle className="spin"/>{t(lang, "loading")}</>}</div>{errorNotification}</>;
   return <><WindowControls language={lang} showError={showError}/><div className="app-shell"><Sidebar page={page} setPage={setPage} language={lang} showError={showError} />
-    <main className="content">{page === "library" ? <Library state={state} update={update} add={() => void addFromDialog()} launch={(path) => void launch(path)} launchingPath={launchingPath} confirmAction={confirmAction} ensureSaved={ensureSaved} showError={showError} activeOperations={activeOperations} claimOperation={claimOperation} releaseOperation={releaseOperation} /> : page === "settings" ? <Settings state={state} update={update} showError={setError}/> : <GlobalSettings state={state} update={update} confirmAction={confirmAction} ensureSaved={ensureSaved} showError={showError} activeOperations={activeOperations} launching={launchingPath !== null} claimOperation={claimOperation} releaseOperation={releaseOperation}/>}</main>
+    <main className="content">{page === "library" ? <Library state={state} update={update} add={() => void addFromDialog()} launch={(path) => void launch(path)} launchingPath={launchingPath} confirmAction={confirmAction} ensureSaved={ensureSaved} showError={showError} activeOperations={activeOperations} claimOperation={claimOperation} releaseOperation={releaseOperation} /> : page === "settings" ? <Settings key={aboutRequest} initialTab={aboutRequest ? "about" : "general"} state={state} update={update} showError={setError} updateStatus={updateStatus} checkUpdates={() => void checkUpdates(false)}/> : <GlobalSettings state={state} update={update} confirmAction={confirmAction} ensureSaved={ensureSaved} showError={showError} activeOperations={activeOperations} launching={launchingPath !== null} claimOperation={claimOperation} releaseOperation={releaseOperation}/>}</main>
     {busy && <div className="overlay"><div className="busy"><LoaderCircle className="spin"/>{t(lang, "loading")}</div></div>}
     {pendingPaths.length > 0 && <div className="overlay"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><h2 id="modal-title">{t(lang, "selectProfile")}</h2><p className="modal-path scroll-panel" tabIndex={0}>{pendingPaths.join(", ")}</p><select value={chosenProfile} onChange={(e) => setChosenProfile(e.target.value)}>{state.profiles.map((profile) => <option key={profile.id} value={profile.id}>{profileName(profile, lang)}</option>)}</select><div className="modal-actions"><button className="secondary" onClick={() => setPendingPaths([])}>{t(lang, "cancel")}</button><button className="primary" disabled={!chosenProfile} onClick={() => { update({ ...state, executables: [...state.executables, ...pendingPaths.map((path) => ({ path, profileId: chosenProfile }))] }); setPendingPaths([]); }}>{t(lang, "confirm")}</button></div></div></div>}
     {confirmation !== null && <ConfirmationDialog message={confirmation} language={lang} onDecision={finishConfirmation} />}
+    {updateNotification && updateStatus.kind === "available" && <div className="update-toast" role="status"><div><strong>{t(lang, "updateAvailable")} {updateStatus.tag}</strong><p>{t(lang, "updateNotice")}</p></div><button className="secondary" onClick={() => { setUpdateNotification(false); setAboutRequest((request) => request + 1); setPage("settings"); }}>{t(lang, "viewUpdate")}</button><button className="icon-button" aria-label={t(lang, "close")} onClick={() => setUpdateNotification(false)}>×</button></div>}
     {errorNotification}
   </div></>;
 }

@@ -200,6 +200,14 @@ async fn open_executable_folder(path: String) -> Result<(), AppError> {
 }
 
 #[tauri::command]
+async fn open_update_download(tag: String) -> Result<(), AppError> {
+    log::info!("Opening update download");
+    tauri::async_runtime::spawn_blocking(move || launcher::open_update_download(&tag))
+        .await
+        .map_err(|e| error("UPDATE_TASK", e))?
+}
+
+#[tauri::command]
 async fn gpu_status(
     app: tauri::AppHandle,
     path: String,
@@ -326,6 +334,7 @@ pub fn run() {
             executable_name,
             launch_executable,
             open_executable_folder,
+            open_update_download,
             gpu_status,
             apply_profile,
             reset_profile,

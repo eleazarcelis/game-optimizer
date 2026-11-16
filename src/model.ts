@@ -28,6 +28,7 @@ export type AppState = {
   launchBehavior?: LaunchBehavior;
   libraryNoticeDismissed?: boolean;
   globalNoticeDismissed?: boolean;
+  automaticUpdateChecks?: boolean;
 };
 
 export function defaultGlobalSettings(): GlobalSettings {
@@ -86,6 +87,7 @@ export function isAppState(value: unknown): value is AppState {
   if (state.globalNoticeDismissed !== undefined && typeof state.globalNoticeDismissed !== "boolean") return false;
   if (state.librarySort !== undefined && !["az", "za", "manual"].includes(state.librarySort)) return false;
   if (state.groupByName !== undefined && typeof state.groupByName !== "boolean") return false;
+  if (state.automaticUpdateChecks !== undefined && typeof state.automaticUpdateChecks !== "boolean") return false;
   const ids = new Set(state.profiles.map((p) => p.id));
   return state.executables.every((e) => e && typeof e.path === "string" && isExe(e.path)
     && typeof e.profileId === "string" && ids.has(e.profileId)

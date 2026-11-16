@@ -39,6 +39,14 @@ describe("library state", () => {
     expect(isAppState(state)).toBe(true);
     expect(isAppState({ ...state, launchBehavior: "invalid" })).toBe(false);
   });
+  it("accepts old states and validates the automatic update preference", () => {
+    const state = initialState();
+    expect(state.automaticUpdateChecks).toBeUndefined();
+    expect(isAppState(state)).toBe(true);
+    expect(isAppState({ ...state, automaticUpdateChecks: true })).toBe(true);
+    expect(isAppState({ ...state, automaticUpdateChecks: false })).toBe(true);
+    expect(isAppState({ ...state, automaticUpdateChecks: "true" })).toBe(false);
+  });
   it("accepts old states and validates persisted notice preferences", () => {
     const state = initialState();
     expect(isAppState(state)).toBe(true);

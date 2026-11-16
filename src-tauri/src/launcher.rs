@@ -74,6 +74,22 @@ pub fn open_folder(path: &str) -> Result<(), AppError> {
     open(folder, None, "FOLDER_OPEN")
 }
 
+pub fn open_update_download(tag: &str) -> Result<(), AppError> {
+    if tag.len() > 201
+        || !tag.starts_with('v')
+        || !tag.as_bytes().get(1).is_some_and(u8::is_ascii_digit)
+        || !tag
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'-')
+    {
+        return Err(error("UPDATE_DOWNLOAD", "Invalid release tag"));
+    }
+    let url = format!(
+        "https://github.com/eleazarcelis/game-optimizer/releases/download/{tag}/Game-Optimizer-{tag}-windows-x64.exe"
+    );
+    open(Path::new(&url), None, "UPDATE_DOWNLOAD")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,6 +116,16 @@ mod tests {
             open_folder(missing.to_str().unwrap()).unwrap_err().code,
             "FOLDER_OPEN"
         );
+    }
+
+    #[test]
+    fn update_download_rejects_unsafe_tags() {
+        for tag in ["", "v", "v1/../../other", "v1?bad", "v1#bad", "x1.2.3"] {
+            assert_eq!(
+                open_update_download(tag).unwrap_err().code,
+                "UPDATE_DOWNLOAD"
+            );
+        }
     }
 
     #[test]

@@ -13,7 +13,8 @@ A Windows desktop application built with Tauri 2, React and TypeScript.
 - Fixed navigation and page headers: only panel contents scroll, with dark/purple scrollbars and keyboard access.
 - Add executables using the file picker or drag and drop; assign a profile when adding.
 - Open an executable's folder or launch it with its button or icon. In Settings, choose whether the app minimizes (default) or closes after a successful launch; starting a game does not automatically apply a profile.
-- Manage language and launch behavior under Settings > General, and built-in and custom profiles under Settings > Profiles.
+- Manage language and launch behavior under Settings > General, built-in and custom profiles under Settings > Profiles, and view the app version under Settings > About.
+- Settings > About can check GitHub for the latest stable release. Automatic checks are off by default; when enabled, the app checks at startup and notifies you without downloading. A separate button opens the Windows x64 portable executable download in your browser when available; replace the old executable manually. No automatic installation or signature verification is provided.
 - Apply and restore CPU priority and GPU preferences with confirmation and a persistent transaction journal. CPU priority requires administrator approval and affects future processes with the same executable name, including in other folders.
 - Defaults permanently removes the enabled CPU and GPU settings and any CPU/GPU actions in an active optimization. It discards that optimization's backup; once completed, Restore cannot undo it. Interrupted operations retain recovery information. Older defaults transactions remain restorable or can be explicitly cleared with Defaults.
 - Global power, Game Mode and Game DVR options are separate from executable profiles and default to no change. Power changes affect the whole computer and require the selected plan to exist.
