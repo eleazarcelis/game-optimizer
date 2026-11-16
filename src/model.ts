@@ -11,6 +11,7 @@ export type Profile = {
   gameDvr: Choice;
   defender: boolean;
 };
+export type ProfileActions = Pick<Profile, "cpu" | "gpu" | "defender">;
 export type Executable = { path: string; profileId: string; favorite?: boolean };
 export type LibrarySort = "az" | "za" | "manual";
 export type GlobalSettings = { power: Choice; gameMode: Choice; gameDvr: Choice };
@@ -63,6 +64,10 @@ export function availableProfileActions(profile: Profile | undefined) {
   return {
     actions: { cpu: profile.cpu, gpu: profile.gpu, defender: profile.defender },
   };
+}
+
+export function profileChanged(profile: Profile | undefined, applied: ProfileActions): boolean {
+  return !profile || profile.cpu !== applied.cpu || profile.gpu !== applied.gpu || profile.defender !== applied.defender;
 }
 
 export function isAppState(value: unknown): value is AppState {

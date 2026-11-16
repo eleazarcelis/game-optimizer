@@ -54,7 +54,7 @@ pub fn launch(path: &str) -> Result<(), AppError> {
     let directory = path
         .parent()
         .ok_or_else(|| error("LAUNCH_FAILED", "Executable has no parent directory"))?;
-    open(&path, Some(directory), "LAUNCH_FAILED")
+    crate::desktop::launch(&path, directory).map_err(|e| error("LAUNCH_FAILED", e))
 }
 
 pub fn open_folder(path: &str) -> Result<(), AppError> {
@@ -159,7 +159,8 @@ mod tests {
                 .success()
         );
         launch(path.to_str().unwrap()).unwrap();
-        let marker = dir.path().join("launch-marker.txt");
+        let directory = path.parent().unwrap();
+        let marker = directory.join("launch-marker.txt");
         for _ in 0..100 {
             if marker.exists() {
                 break;
@@ -168,7 +169,7 @@ mod tests {
         }
         assert_eq!(
             std::fs::read_to_string(marker).unwrap(),
-            dir.path().to_string_lossy()
+            format!("{}\n0", directory.to_string_lossy())
         );
     }
 }

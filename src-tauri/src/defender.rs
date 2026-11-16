@@ -214,6 +214,30 @@ impl Defender for WindowsDefender {
 
 pub struct DefenderExecutor;
 impl DefenderExecutor {
+    pub fn matches_applied(&mut self, step: &Step) -> Result<bool, String> {
+        Self::matches_applied_with(step, read)
+    }
+
+    fn matches_applied_with(
+        step: &Step,
+        mut query: impl FnMut(&str, &str) -> Result<bool, String>,
+    ) -> Result<bool, String> {
+        let action = action(step)?;
+        let before: Snapshot =
+            serde_json::from_value(step.before.clone().ok_or("Missing Defender snapshot")?)
+                .map_err(|e| e.to_string())?;
+        let identity = before
+            .identity
+            .ok_or("Defender journal has no resource identity; manual recovery is required")?;
+        let target = Target::open(&action.target, action.kind == "defender-path")?;
+        if target.identity() != &identity {
+            return Ok(false);
+        }
+        let matches = query(&action.kind, &action.target)? == action.enabled;
+        target.ensure_path(&action.target, action.kind == "defender-path")?;
+        Ok(matches)
+    }
+
     fn executor(step: &Step) -> Result<Executor<WindowsDefender>, String> {
         let action = action(step)?;
         let identity = match &step.before {
@@ -431,6 +455,40 @@ mod tests {
             self.0 = desired;
             Ok(())
         }
+    }
+
+    #[test]
+    fn status_checks_exclusion_and_recorded_resource_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("game.exe");
+        std::fs::write(&path, b"game").unwrap();
+        let path_str = path.to_str().unwrap();
+        let identity = Target::open(path_str, false).unwrap().identity().clone();
+        let step = Step {
+            id: "defender-process".into(),
+            action: json!({"kind":"defender-process","path":path_str,"target":path_str,"owner":Uuid::new_v4(),"enabled":true}),
+            status: crate::transaction::StepStatus::Applied,
+            before: Some(json!({"excluded":false,"identity":identity})),
+            error: None,
+        };
+        assert!(DefenderExecutor::matches_applied_with(&step, |_, _| Ok(true)).unwrap());
+        assert!(!DefenderExecutor::matches_applied_with(&step, |_, _| Ok(false)).unwrap());
+        assert!(
+            DefenderExecutor::matches_applied_with(&step, |_, _| Err("query failed".into()))
+                .is_err()
+        );
+        let mut old = step.clone();
+        old.before = Some(json!({"excluded":false}));
+        assert!(
+            DefenderExecutor::matches_applied_with(&old, |_, _| panic!("Unverifiable journal"))
+                .is_err()
+        );
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, b"replacement").unwrap();
+        assert!(
+            !DefenderExecutor::matches_applied_with(&step, |_, _| panic!("Resource changed"))
+                .unwrap()
+        );
     }
 
     #[test]

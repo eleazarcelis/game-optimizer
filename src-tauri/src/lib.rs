@@ -15,6 +15,8 @@ mod defender;
 #[cfg(windows)]
 mod defender_coordination;
 #[cfg(windows)]
+mod desktop;
+#[cfg(windows)]
 mod executable_name;
 #[cfg(windows)]
 mod global;
@@ -333,6 +335,15 @@ pub fn run() {
                 },
             };
             app.manage(access);
+            #[cfg(windows)]
+            match app.get_webview_window("main") {
+                Some(window) => {
+                    if let Err(e) = window.set_focus() {
+                        log::warn!("Could not focus the main window at startup: {e}");
+                    }
+                }
+                None => log::error!("Could not find the main window at startup"),
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -359,6 +370,11 @@ pub fn run() {
 #[cfg(windows)]
 pub fn run_admin_helper(encoded: &str) -> i32 {
     privileged::helper(encoded)
+}
+
+#[cfg(windows)]
+pub fn check_desktop() -> Result<(), String> {
+    desktop::check_user()
 }
 
 #[cfg(test)]

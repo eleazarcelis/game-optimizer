@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { availableProfileActions, containsPath, defaultGlobalSettings, fileName, initialState, isAppState, isExe } from "./model";
+import { availableProfileActions, containsPath, defaultGlobalSettings, fileName, initialState, isAppState, isExe, profileChanged } from "./model";
 import { profileName, translate } from "./i18n";
 
 describe("library state", () => {
@@ -69,6 +69,16 @@ describe("library state", () => {
     });
     expect(availableProfileActions({ ...profile, cpu: "none", gpu: "none", defender: false })).toBeNull();
     expect(availableProfileActions(undefined)).toBeNull();
+  });
+  it("detects only changes to executable profile actions", () => {
+    const profile = initialState().profiles[0];
+    const applied = { cpu: profile.cpu, gpu: profile.gpu, defender: profile.defender };
+    expect(profileChanged(profile, applied)).toBe(false);
+    expect(profileChanged({ ...profile, name: "Renamed", power: "none", gameMode: "off" }, applied)).toBe(false);
+    expect(profileChanged({ ...profile, cpu: "none" }, applied)).toBe(true);
+    expect(profileChanged({ ...profile, gpu: "balanced" }, applied)).toBe(true);
+    expect(profileChanged({ ...profile, defender: true }, applied)).toBe(true);
+    expect(profileChanged(undefined, applied)).toBe(true);
   });
 });
 

@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, ChevronRight, FolderOpen, Gamepad2, GripVertical, LoaderCircle, MoreVertical, Play, Plus, RotateCcw, Star, Trash2, X, Zap } from "lucide-react";
-import type { AppState, Executable, Language, LibrarySort } from "../model";
-import { availableProfileActions, fileName } from "../model";
+import type { AppState, Executable, Language, LibrarySort, ProfileActions } from "../model";
+import { availableProfileActions, fileName, profileChanged } from "../model";
 import { organizeLibrary, planLibraryMove, type LibraryEntry, type LibraryGroup } from "../library";
 import { profileName, translate as t } from "../i18n";
 import { DismissibleNotice } from "./DismissibleNotice";
 
 type OperationProps = { activeOperations: string[]; claimOperation: (path: string) => boolean; releaseOperation: (path: string) => void };
 type Props = OperationProps & { state: AppState; update: (state: AppState) => void; add: () => void; launch: (path: string) => void; launchingPath: string | null; confirmAction: (message: string) => Promise<boolean>; ensureSaved: () => Promise<void>; showError: (error: unknown) => void };
-type GpuStatus = { state: "none" | "applied" | "defaults" | "recovery" | "conflict" | "unverified" | "resetCommit"; detail: string | null };
+type GpuStatus = { state: "none" | "applied" | "defaults" | "recovery" | "conflict" | "unverified" | "resetCommit"; detail: string | null; appliedProfile: ProfileActions | null };
 type DragHandlers = Pick<React.HTMLAttributes<HTMLElement>, "onPointerDown" | "onPointerMove" | "onPointerUp" | "onPointerCancel" | "onLostPointerCapture">;
 function ExecutableIcon({ path, language, launch, disabled }: { path: string; language: Language; launch: () => void; disabled: boolean }) {
   const [icon, setIcon] = useState<string>();
@@ -60,25 +60,34 @@ function Entry({ item, name, nameFailed, state, remove, favorite, dragHandle, dr
   }, [item.path, showError, busy]);
   const plan = availableProfileActions(profile);
   const resetPlan = profile && { actions: { cpu: profile.cpu, gpu: profile.gpu, defender: false } };
-  async function perform(action: "apply" | "restore" | "reset") {
+  async function perform(action: "apply" | "restore" | "reset" | "reapply") {
     let claimed = false;
+    let restoredForReapply = false;
     try {
       const selectedPlan = action === "reset" ? resetPlan : plan;
-      const details = selectedPlan && (action === "apply" || action === "reset")
-        ? `\n\n${t(lang, "cpu")}: ${t(lang, selectedPlan.actions.cpu)}\n${t(lang, "gpu")}: ${t(lang, selectedPlan.actions.gpu === "balanced" ? "gpuSaving" : selectedPlan.actions.gpu)}\n${t(lang, "defender")}: ${t(lang, action === "reset" ? "none" : selectedPlan.actions.defender ? "on" : "off")}${action === "apply" && selectedPlan.actions.defender ? `\n${t(lang, "defenderWarning")}` : ""}`
+      const details = selectedPlan && (action === "apply" || action === "reset" || action === "reapply")
+        ? `\n\n${t(lang, "cpu")}: ${t(lang, selectedPlan.actions.cpu)}\n${t(lang, "gpu")}: ${t(lang, selectedPlan.actions.gpu === "balanced" ? "gpuSaving" : selectedPlan.actions.gpu)}\n${t(lang, "defender")}: ${t(lang, action === "reset" ? "none" : selectedPlan.actions.defender ? "on" : "off")}${action !== "reset" && selectedPlan.actions.defender ? `\n${t(lang, "defenderWarning")}` : ""}`
         : "";
-      if (!await confirmAction(t(lang, action === "apply" ? "gpuConfirm" : action === "reset" ? "resetConfirm" : status?.state === "resetCommit" ? "finishResetConfirm" : "restoreConfirm") + details)) return;
+      if (!await confirmAction(t(lang, action === "apply" ? "gpuConfirm" : action === "reapply" ? "reapplyConfirm" : action === "reset" ? "resetConfirm" : status?.state === "resetCommit" ? "finishResetConfirm" : "restoreConfirm") + details)) return;
       if (!claimOperation(item.path)) return;
       claimed = true;
       await ensureSaved();
-      if (action !== "restore") {
+      if (action === "reapply") {
+        if (!selectedPlan) throw new Error(t(lang, "profileUnsupported"));
+        await invoke("restore_profile", { path: item.path });
+        restoredForReapply = true;
+        await invoke("apply_profile", { path: item.path, profile: selectedPlan.actions });
+      } else if (action !== "restore") {
         if (!selectedPlan) throw new Error(t(lang, "profileUnsupported"));
         await invoke(action === "apply" ? "apply_profile" : "reset_profile", { path: item.path, profile: selectedPlan.actions });
       } else {
         await invoke("restore_profile", { path: item.path });
       }
     } catch (error) {
-      showError(error);
+      if (restoredForReapply) {
+        const detail = error && typeof error === "object" && "message" in error ? String(error.message) : String(error);
+        showError({ code: "REAPPLY_FAILED", message: `${t(lang, "reapplyFailed")} ${detail}` });
+      } else showError(error);
     } finally {
       if (claimed) {
         try {
@@ -97,6 +106,8 @@ function Entry({ item, name, nameFailed, state, remove, favorite, dragHandle, dr
   const statusLabel = statusFailed ? t(lang, statusErrorDismissed ? "notOptimized" : "statusError") : !status ? t(lang, "loading")
     : t(lang, status.state === "none" ? "gpuNone" : status.state === "applied" ? "gpuApplied" : status.state === "defaults" ? "defaultsApplied" : status.state === "conflict" ? "gpuConflict" : status.state === "unverified" ? "defenderStatusUnverified" : status.state === "resetCommit" ? "resetCommitStatus" : "gpuRecovery");
   const canReset = status && ["none", "applied", "defaults"].includes(status.state);
+  const canCompare = status && (status.state === "applied" || status.state === "unverified");
+  const needsReapply = !!(canCompare && status.appliedProfile && profileChanged(profile, status.appliedProfile));
   const hasResetActions = !!profile && (profile.cpu !== "none" || profile.gpu !== "none" || status?.state === "applied" || status?.state === "defaults");
   async function confirmRemove() {
     setMenuOpen(false);
@@ -136,7 +147,10 @@ function Entry({ item, name, nameFailed, state, remove, favorite, dragHandle, dr
       </div>
     </div>
     <div className="entry-meta"><button className={`icon-button entry-favorite${item.favorite ? " selected" : ""}`} title={t(lang, item.favorite ? "removeFavorite" : "addFavorite")} aria-label={`${t(lang, item.favorite ? "removeFavorite" : "addFavorite")}: ${name ?? fileName(item.path)}`} aria-pressed={!!item.favorite} onClick={favorite}><Star size={16} fill={item.favorite ? "currentColor" : "none"}/></button><span className="profile-tag">{profile ? profileName(profile, lang) : t(lang, "noProfile")}</span><span className="status" title={status?.detail ?? undefined}><i />{busy ? <><LoaderCircle className="spin" size={12}/>{t(lang, "working")}</> : statusLabel}</span>{statusFailed && !statusErrorDismissed && <button className="icon-button status-dismiss" title={t(lang, "dismissStatusError")} aria-label={t(lang, "dismissStatusError")} onClick={() => setStatusErrorDismissed(true)}><X size={14}/></button>}</div>
+    {!busy && status?.state === "unverified" && status.detail && <p className="profile-change" role="status">{status.detail}</p>}
+    {!busy && canCompare && (needsReapply || !status.appliedProfile) && <p className="profile-change" role="status">{t(lang, needsReapply ? plan ? "profileChanged" : "profileChangedNoActions" : "profileComparisonUnavailable")}</p>}
     {dragHandle}
+    {needsReapply && <div className="entry-actions reapply-actions"><button className="entry-optimize" disabled={busy || launchingPath !== null || !plan} title={!plan ? t(lang, "reapplyNoActions") : undefined} onClick={() => void perform("reapply")}><Zap size={14} aria-hidden="true"/>{t(lang, "reapply")}</button></div>}
     <div className="entry-actions entry-profile-actions">
       {status && status.state !== "none"
         ? <button className="entry-restore" disabled={busy || launchingPath !== null} onClick={() => void perform("restore")}><RotateCcw size={14} aria-hidden="true"/>{t(lang, status.state === "resetCommit" ? "finishReset" : "revert")}</button>

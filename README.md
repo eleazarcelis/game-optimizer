@@ -8,16 +8,21 @@ Game Optimizer is a Windows desktop app for organizing games and managing how th
 
 ## Current features
 
-- **Library:** Add Windows executables with the file picker or by dragging them in, and assign each a profile. Launch a game or open its folder from its card. Launching does not apply the profile automatically.
+- **Library:** Add Windows executables with the file picker and assign each a profile. Launch a game or open its folder from its card. Launching does not apply the profile automatically.
 - **Organization:** Choose a grid or list, mark favorites, sort by name or arrange items manually. Related names can be grouped, although automatic grouping may not always match. Manual ordering also works with the keyboard; favorites stay first.
 - **Profiles:** Under Settings > Profiles, adjust the built-in profiles or create your own. A profile can request a CPU priority and GPU preference for an executable. CPU priority applies to future processes with the same executable name, including in other folders, and requires administrator permission. The GPU preference asks Windows which GPU to use; Windows or the app may choose differently.
 - **Apply and restore:** Use Optimize on a library card to apply its profile, and Restore to return to the saved previous settings. Confirm changes before applying them. Status describes changes managed by this app, not all Windows settings.
+- **Changed profiles:** When the executable's CPU, GPU or Defender choices differ from the applied profile, the card offers Re-optimize. After confirmation, it restores the previous settings and then applies the displayed profile. If the second step fails, the previous optimization is no longer active and recovery may be required. If the profile has no enabled actions, use Restore instead. Changes to a profile's name or global settings do not require re-optimization.
 - **Defaults:** This action removes the selected CPU and GPU settings and discards the corresponding saved backup. Once completed, Restore cannot undo it. It does not remove Defender exclusions; restore an optimization that includes them first.
-- **Defender:** Exclusions are optional and off by default. Enabling them excludes the executable's entire folder and files opened by that process from scanning, reducing protection. Administrator approval is required; the status remains unverified until Restore checks it.
+- **Defender:** Exclusions are optional and off by default. Enabling them excludes the executable's entire folder and files opened by that process from scanning, reducing protection. The app checks whether active exclusions still match; if it cannot verify them, the card reports this without changing them.
 - **Global optimizations:** Power plan, Game Mode and Game DVR are separate from profiles and do nothing by default. The power plan affects the entire computer and the chosen plan must exist. Game DVR controls Windows recording, not game graphics.
 - **Settings and updates:** Choose English or Spanish and whether the app minimizes or closes after a successful launch. Under Settings > About, check for the latest stable release on GitHub or open GitHub to report a bug or suggest an improvement. Optional startup checks are off by default and only notify you. Downloading opens the portable Windows x64 executable in your browser; replace the old executable manually. Installation and signature verification are not automatic.
 
 If Windows settings were changed elsewhere, Restore will not overwrite the conflicting change. If an operation is interrupted or needs recovery, keep the app data and the library entry and use Restore. Only one instance can access the app data at a time.
+
+The release app requests administrator approval at startup, rather than for each CPU or Defender action. Sign in with an administrator account: using another account's credentials at the prompt is not supported because it would use that account's data and Windows settings. Games start with the desktop user's non-elevated permissions; if that cannot be verified, launch fails instead of starting them elevated. Games that require administrator access may not start this way. Due to Windows restrictions, dragging files from a normal Explorer window into the elevated app may not work; use Add executable.
+
+Opening folders and external links uses the Windows shell from the elevated app. Depending on the associated application and whether it is already running, it may also start elevated.
 
 The [legacy scripts](./legacy-scripts/) are separate from the desktop app and have different behavior and risks.
 
@@ -54,6 +59,7 @@ npm run tauri dev
 ```
 
 Run frontend tests with `npm test` and native tests with `cargo test --manifest-path src-tauri\Cargo.toml`.
+Debug builds run without a required elevation manifest and may prompt separately for privileged actions; the release build requires administrator approval at startup.
 
 To build a portable executable without an installer:
 

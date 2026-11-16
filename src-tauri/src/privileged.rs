@@ -311,6 +311,7 @@ pub fn helper(encoded: &str) -> i32 {
     match result {
         Ok(code) => code,
         Err(e) => {
+            log::error!("ADMIN_ACTION_FAILED: {e}");
             eprintln!("ADMIN_ACTION_FAILED: {e}");
             match e.as_str() {
                 "Defender exclusion overlaps another active profile" => 12,
@@ -357,11 +358,15 @@ pub fn query_defender(resource: &str, target: &str) -> Result<bool, String> {
 }
 
 fn launch_code(job: &Job) -> Result<u32, String> {
-    log::info!("Requesting administrator approval");
     let payload = STANDARD.encode(serde_json::to_vec(job).map_err(|e| e.to_string())?);
     if payload.len() > 16000 {
         return Err("Administrative request is too large".into());
     }
+    if unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() } != 0 {
+        log::info!("Executing administrative action in elevated application");
+        return Ok(helper(&payload) as u32);
+    }
+    log::info!("Requesting administrator approval");
     #[cfg(test)]
     let executable = match std::env::var_os("GAME_OPTIMIZER_HELPER_EXE") {
         Some(path) => std::path::PathBuf::from(path),
@@ -440,6 +445,20 @@ fn launch_inner(executable: &Path, payload: &str) -> Result<u32, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires an elevated test process; does not change Windows settings"]
+    fn elevated_job_runs_without_another_helper() {
+        assert_ne!(unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() }, 0);
+        assert_eq!(
+            launch_code(&Job::DefenderQuery {
+                resource: "defender-process".into(),
+                target: "invalid".into(),
+            })
+            .unwrap(),
+            1
+        );
+    }
+
     #[test]
     fn rejects_registry_path_injection() {
         assert!(cpu_name(r"C:\Games\game.EXE").is_ok());

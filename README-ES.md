@@ -8,16 +8,21 @@ Game Optimizer es una aplicación de escritorio para Windows que organiza juegos
 
 ## Funcionalidades actuales
 
-- **Biblioteca:** Agrega ejecutables de Windows con el selector o arrastrándolos y asigna un perfil a cada uno. Desde su tarjeta puedes iniciar un juego o abrir su carpeta. Iniciarlo no aplica el perfil automáticamente.
+- **Biblioteca:** Agrega ejecutables de Windows con el selector y asigna un perfil a cada uno. Desde su tarjeta puedes iniciar un juego o abrir su carpeta. Iniciarlo no aplica el perfil automáticamente.
 - **Organización:** Elige una grilla o lista, marca favoritos, ordena por nombre o acomoda los elementos manualmente. Puedes agrupar nombres relacionados, aunque la agrupación automática puede equivocarse. El orden manual también admite el teclado; los favoritos permanecen primero.
 - **Perfiles:** En Configuración > Perfiles, ajusta los perfiles incluidos o crea los tuyos. Un perfil puede solicitar una prioridad de CPU y una preferencia de GPU para un ejecutable. La prioridad de CPU afecta a futuras ejecuciones con el mismo nombre, incluso en otras carpetas, y requiere permiso de administrador. La preferencia de GPU solicita a Windows qué GPU usar; Windows o la aplicación pueden elegir otra.
 - **Aplicar y restaurar:** Usa Optimizar en una tarjeta para aplicar su perfil y Restaurar para recuperar los ajustes anteriores guardados. Confirma los cambios antes de aplicarlos. El estado refleja los cambios gestionados por esta aplicación, no toda la configuración de Windows.
+- **Perfiles modificados:** Si las opciones de CPU, GPU o Defender del ejecutable difieren del perfil aplicado, la tarjeta ofrece Reoptimizar. Tras confirmar, restaura los ajustes anteriores y aplica el perfil mostrado. Si falla el segundo paso, la optimización anterior ya no estará activa y puede requerirse recuperación. Si el perfil no tiene acciones habilitadas, usa Restaurar. Cambiar el nombre del perfil o los ajustes globales no requiere reoptimizar.
 - **Valores predefinidos:** Esta acción elimina los ajustes de CPU y GPU seleccionados y descarta el respaldo correspondiente. Una vez completada, Restaurar no puede deshacerla. No elimina exclusiones de Defender; restaura primero una optimización que las incluya.
-- **Defender:** Las exclusiones son opcionales y están desactivadas por defecto. Al activarlas se excluyen del análisis toda la carpeta del ejecutable y los archivos abiertos por ese proceso, lo que reduce la protección. Se requiere permiso de administrador; el estado permanece sin verificar hasta que Restaurar lo compruebe.
+- **Defender:** Las exclusiones son opcionales y están desactivadas por defecto. Al activarlas se excluyen del análisis toda la carpeta del ejecutable y los archivos abiertos por ese proceso, lo que reduce la protección. La app comprueba que las exclusiones activas sigan coincidiendo; si no puede verificarlas, la tarjeta lo avisa sin modificarlas.
 - **Optimizaciones globales:** El plan de energía, Modo Juego y Game DVR están separados de los perfiles y no realizan cambios por defecto. El plan de energía afecta a todo el equipo y el plan elegido debe existir. Game DVR controla la grabación de Windows, no los gráficos del juego.
 - **Configuración y actualizaciones:** Elige inglés o español y si la app se minimiza o cierra tras iniciar correctamente. En Configuración > Acerca de puedes buscar la última versión estable o abrir GitHub para reportar errores y sugerir mejoras. La búsqueda opcional al iniciar está desactivada por defecto y solo avisa. La descarga abre en el navegador el ejecutable portátil para Windows x64; reemplaza el anterior manualmente. La instalación y la verificación de firma no son automáticas.
 
 Si un ajuste de Windows cambió por otro medio, Restaurar no sobrescribe ese cambio. Si una operación se interrumpe o necesita recuperación, conserva los datos de la app y la entrada de la biblioteca y usa Restaurar. Solo una instancia puede acceder a los datos de la app a la vez.
+
+La versión publicada solicita permiso de administrador al iniciar, en lugar de pedirlo para cada acción de CPU o Defender. Inicia sesión con una cuenta administradora: no se admite introducir las credenciales de otra cuenta, porque se usarían sus datos y ajustes de Windows. Los juegos se inician con los permisos normales del usuario del escritorio; si no se pueden verificar, el inicio falla en lugar de ejecutarlos elevados. Es posible que los juegos que requieren administrador no se inicien de esta forma. Por restricciones de Windows, arrastrar archivos desde una ventana normal del Explorador hacia la app elevada puede no funcionar; usa Agregar ejecutable.
+
+La apertura de carpetas y enlaces externos usa el shell de Windows desde la app elevada. Según la aplicación asociada y si ya está ejecutándose, podría iniciarse también con permisos de administrador.
 
 Los [scripts anteriores](./legacy-scripts/) son independientes de la aplicación de escritorio y tienen otros comportamientos y riesgos.
 
@@ -54,6 +59,7 @@ npm run tauri dev
 ```
 
 Para las pruebas del frontend ejecuta `npm test`; para las pruebas nativas, `cargo test --manifest-path src-tauri\Cargo.toml`.
+Las compilaciones de desarrollo no exigen elevación al iniciar y pueden solicitar permisos por separado para acciones privilegiadas; la versión de producción solicita administrador al iniciar.
 
 Para generar un ejecutable portable sin instalador:
 

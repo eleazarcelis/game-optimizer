@@ -17,7 +17,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileActions {
     pub cpu: String,
@@ -29,6 +29,54 @@ pub struct ProfileActions {
 pub struct GpuStatus {
     pub state: &'static str,
     pub detail: Option<String>,
+    #[serde(rename = "appliedProfile")]
+    pub applied_profile: Option<ProfileActions>,
+}
+
+fn applied_profile(steps: &[Step]) -> Option<ProfileActions> {
+    let mut profile = ProfileActions {
+        cpu: "none".into(),
+        gpu: "none".into(),
+        defender: false,
+    };
+    let mut defender_path = false;
+    let mut defender_process = false;
+    for step in steps {
+        match step.id.as_str() {
+            "cpu" => {
+                profile.cpu = match step.action.get("priority")?.as_u64()? {
+                    1 => "low",
+                    3 => "high",
+                    _ => return None,
+                }
+                .into();
+            }
+            "gpu" => {
+                profile.gpu = match step.action.get("preference")?.as_u64()? {
+                    1 => "balanced",
+                    2 => "high",
+                    _ => return None,
+                }
+                .into();
+            }
+            "defender-path" | "defender-process" => {
+                if step.action.get("enabled")?.as_bool()? != true {
+                    return None;
+                }
+                if step.id == "defender-path" {
+                    defender_path = true;
+                } else {
+                    defender_process = true;
+                }
+            }
+            _ => return None,
+        }
+    }
+    if defender_path != defender_process {
+        return None;
+    }
+    profile.defender = defender_path;
+    Some(profile)
 }
 
 fn transaction_error(e: TransactionError) -> AppError {
@@ -88,9 +136,7 @@ impl Executor {
         match step.id.as_str() {
             "gpu" => GpuExecutor.matches_applied(step),
             "cpu" => CpuExecutor.matches_applied(step),
-            "defender-path" | "defender-process" => {
-                Err("Defender status requires explicit elevated verification".into())
-            }
+            "defender-path" | "defender-process" => DefenderExecutor.matches_applied(step),
             _ => Err("Invalid profile action".into()),
         }
     }
@@ -323,6 +369,18 @@ fn validate_reset(tx: &Transaction) -> Result<(), AppError> {
 }
 
 pub fn status(root: &Path, path: &str) -> Result<GpuStatus, AppError> {
+    let can_verify_defender = unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() } != 0;
+    status_with(root, path, can_verify_defender, |step| {
+        Executor.matches_applied(step)
+    })
+}
+
+fn status_with(
+    root: &Path,
+    path: &str,
+    can_verify_defender: bool,
+    mut matches_applied: impl FnMut(&Step) -> Result<bool, String>,
+) -> Result<GpuStatus, AppError> {
     log::info!("Getting GPU transaction status");
     let dir = resource_dir(root, path)?;
     let _guard = lock(&dir)?;
@@ -330,10 +388,11 @@ pub fn status(root: &Path, path: &str) -> Result<GpuStatus, AppError> {
         return Ok(GpuStatus {
             state: "none",
             detail: None,
+            applied_profile: None,
         });
     };
     let tx = Transaction::open(&file).map_err(transaction_error)?;
-    let detail = tx.journal.steps.iter().find_map(|s| s.error.clone());
+    let mut detail = tx.journal.steps.iter().find_map(|s| s.error.clone());
     if let Some(reset) = &tx.journal.reset {
         return Ok(GpuStatus {
             state: if reset.phase == ResetPhase::Committing {
@@ -342,25 +401,40 @@ pub fn status(root: &Path, path: &str) -> Result<GpuStatus, AppError> {
                 "recovery"
             },
             detail,
+            applied_profile: None,
         });
     }
     let mut state = "applied";
     let mut defender_unverified = false;
+    if tx
+        .journal
+        .steps
+        .iter()
+        .any(|step| step.status != StepStatus::Applied)
+    {
+        state = "recovery";
+    }
     for step in &tx.journal.steps {
-        if step.status != StepStatus::Applied {
-            state = "recovery";
+        if state == "recovery" {
             break;
         }
-        if matches!(step.id.as_str(), "defender-path" | "defender-process") {
+        let is_defender = matches!(step.id.as_str(), "defender-path" | "defender-process");
+        if is_defender && !can_verify_defender {
             defender_unverified = true;
             continue;
         }
-        if !Executor
-            .matches_applied(step)
-            .map_err(|e| error("ACTION_CHECK", e))?
-        {
-            state = "conflict";
-            break;
+        match matches_applied(step) {
+            Ok(true) => {}
+            Ok(false) => {
+                state = "conflict";
+                break;
+            }
+            Err(message) if is_defender => {
+                log::error!("Defender status verification failed: {message}");
+                defender_unverified = true;
+                detail = Some(message);
+            }
+            Err(message) => return Err(error("ACTION_CHECK", message)),
         }
     }
     if state == "applied"
@@ -375,7 +449,16 @@ pub fn status(root: &Path, path: &str) -> Result<GpuStatus, AppError> {
     if matches!(state, "applied" | "defaults") && defender_unverified {
         state = "unverified";
     }
-    Ok(GpuStatus { state, detail })
+    let applied_profile = if matches!(state, "applied" | "unverified") {
+        applied_profile(&tx.journal.steps)
+    } else {
+        None
+    };
+    Ok(GpuStatus {
+        state,
+        detail,
+        applied_profile,
+    })
 }
 
 pub fn apply(
@@ -669,7 +752,138 @@ mod tests {
             "status":"Applied","before":{"excluded":false},"error":null
         }]});
         fs::write(file, serde_json::to_vec(&journal).unwrap()).unwrap();
-        assert_eq!(status(root.path(), path).unwrap().state, "unverified");
+        let result = status_with(root.path(), path, false, |_| {
+            panic!("Must not query Defender")
+        })
+        .unwrap();
+        assert_eq!(result.state, "unverified");
+        assert_eq!(result.applied_profile, None);
+    }
+
+    #[test]
+    fn reconstructs_applied_actions_from_existing_journals() {
+        let root = tempfile::tempdir().unwrap();
+        let path = r"C:\Games\Demo.exe";
+        for profile in [
+            ProfileActions {
+                cpu: "high".into(),
+                gpu: "balanced".into(),
+                defender: false,
+            },
+            ProfileActions {
+                cpu: "none".into(),
+                gpu: "none".into(),
+                defender: true,
+            },
+            ProfileActions {
+                cpu: "low".into(),
+                gpu: "high".into(),
+                defender: true,
+            },
+        ] {
+            let requests = requests(path, &profile, false).unwrap();
+            let tx = Transaction::create(
+                &root.path().join(format!("{}.json", uuid::Uuid::new_v4())),
+                &requests,
+            )
+            .unwrap();
+            assert_eq!(applied_profile(&tx.journal.steps), Some(profile));
+        }
+        let defaults = ProfileActions {
+            cpu: "high".into(),
+            gpu: "none".into(),
+            defender: false,
+        };
+        let requests = requests(path, &defaults, true).unwrap();
+        let tx = Transaction::create(&root.path().join("defaults.json"), &requests).unwrap();
+        assert_eq!(applied_profile(&tx.journal.steps), None);
+    }
+
+    #[test]
+    fn unverified_defender_status_exposes_the_applied_profile_without_claiming_verification() {
+        let root = tempfile::tempdir().unwrap();
+        let path = r"C:\Games\Demo.exe";
+        let dir = resource_dir(root.path(), path).unwrap();
+        let profile = ProfileActions {
+            cpu: "none".into(),
+            gpu: "none".into(),
+            defender: true,
+        };
+        let requests = requests(path, &profile, false).unwrap();
+        let mut tx = Transaction::create(&dir.join("test.json"), &requests).unwrap();
+        for step in &mut tx.journal.steps {
+            step.status = StepStatus::Applied;
+            step.before = Some(json!({"excluded":false}));
+        }
+        fs::write(
+            dir.join("test.json"),
+            serde_json::to_vec(&tx.journal).unwrap(),
+        )
+        .unwrap();
+        drop(tx);
+        let result = status_with(root.path(), path, false, |_| {
+            panic!("Must not query Defender")
+        })
+        .unwrap();
+        assert_eq!(result.state, "unverified");
+        assert_eq!(result.applied_profile, Some(profile));
+        assert!(serde_json::to_value(result).unwrap()["appliedProfile"]["defender"] == true);
+    }
+
+    #[test]
+    fn defender_status_distinguishes_verified_conflicts_and_query_failures() {
+        let root = tempfile::tempdir().unwrap();
+        let path = r"C:\Games\Demo.exe";
+        let dir = resource_dir(root.path(), path).unwrap();
+        let profile = ProfileActions {
+            cpu: "none".into(),
+            gpu: "none".into(),
+            defender: true,
+        };
+        let requests = requests(path, &profile, false).unwrap();
+        let file = dir.join("test.json");
+        let mut tx = Transaction::create(&file, &requests).unwrap();
+        for step in &mut tx.journal.steps {
+            step.status = StepStatus::Applied;
+            step.before = Some(json!({"excluded": false}));
+        }
+        fs::write(&file, serde_json::to_vec(&tx.journal).unwrap()).unwrap();
+        drop(tx);
+
+        let mut checked = Vec::new();
+        let result = status_with(root.path(), path, true, |step| {
+            checked.push(step.id.clone());
+            Ok(true)
+        })
+        .unwrap();
+        assert_eq!(checked, ["defender-path", "defender-process"]);
+        assert_eq!(result.state, "applied");
+        assert_eq!(result.applied_profile, Some(profile));
+
+        let result = status_with(root.path(), path, true, |step| {
+            Ok(step.id != "defender-process")
+        })
+        .unwrap();
+        assert_eq!(result.state, "conflict");
+        assert_eq!(result.applied_profile, None);
+
+        let result = status_with(root.path(), path, true, |_| {
+            Err("Defender unavailable".into())
+        })
+        .unwrap();
+        assert_eq!(result.state, "unverified");
+        assert_eq!(result.detail.as_deref(), Some("Defender unavailable"));
+        assert!(result.applied_profile.is_some());
+
+        let mut tx = Transaction::open(&file).unwrap();
+        tx.journal.steps[1].status = StepStatus::Restoring;
+        fs::write(&file, serde_json::to_vec(&tx.journal).unwrap()).unwrap();
+        drop(tx);
+        let result = status_with(root.path(), path, true, |_| {
+            panic!("Recovery must take priority")
+        })
+        .unwrap();
+        assert_eq!(result.state, "recovery");
     }
 
     #[test]
@@ -884,7 +1098,14 @@ mod tests {
             defender: true,
         };
         apply(&root, &executable, &profile, false).unwrap();
-        assert_eq!(status(&root, &executable).unwrap().state, "unverified");
+        assert_eq!(
+            status(&root, &executable).unwrap().state,
+            if unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() } != 0 {
+                "applied"
+            } else {
+                "unverified"
+            }
+        );
         assert!(crate::privileged::query_defender("defender-path", folder).unwrap());
         assert!(crate::privileged::query_defender("defender-process", &executable).unwrap());
         restore(&root, &executable).unwrap();
@@ -929,7 +1150,14 @@ mod tests {
             defender: true,
         };
         apply(&root, &executable, &profile, false).unwrap();
-        assert_eq!(status(&root, &executable).unwrap().state, "unverified");
+        assert_eq!(
+            status(&root, &executable).unwrap().state,
+            if unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() } != 0 {
+                "applied"
+            } else {
+                "unverified"
+            }
+        );
         assert!(crate::privileged::query_defender("defender-path", folder).unwrap());
         assert!(crate::privileged::query_defender("defender-process", &executable).unwrap());
         let nested_folder = Path::new(folder).join("nested");
