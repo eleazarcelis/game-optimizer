@@ -1,6 +1,8 @@
 name: Build release
 
 on:
+  push:
+    branches: [main]
   release:
     types: [published]
 
@@ -11,10 +13,10 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - name: Check out release tag
+      - name: Check out source
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event.release.tag_name || github.sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -26,6 +28,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Validate release version
+        if: github.event_name == 'release'
         shell: pwsh
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -43,6 +46,12 @@ jobs:
             throw "Release tag version $version does not match package.json version $packageVersion."
           }
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          save-if: ${{ github.event_name == 'push' }}
+
       - name: Install dependencies
         run: npm ci
 
@@ -54,6 +63,7 @@ jobs:
         run: npm run tauri build -- --no-bundle -- --locked
 
       - name: Attach executable to release
+        if: github.event_name == 'release'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}

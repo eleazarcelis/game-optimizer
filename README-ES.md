@@ -55,6 +55,8 @@ El ejecutable se genera en `src-tauri\target\release`. WebView2 Runtime debe est
 
 Cuando el workflow esté en la rama predeterminada, actualiza la versión en `package.json` y `package-lock.json` y publica una release de GitHub con una etiqueta coincidente como `v1.2.3` o `v1.2.3-rc.1` (no se admiten metadatos de compilación como `+build`). El workflow descarga esa etiqueta, verifica que coincida con `package.json`, compila un ejecutable portable para Windows x64 y adjunta `Game-Optimizer-<etiqueta>-windows-x64.exe` a la release. Tauri lee de `package.json` la versión mostrada en la app y los metadatos de versión del ejecutable; cada componente numérico debe ser como máximo 65535. Las releases en borrador se compilan al publicarlas. Si ya existe un archivo con ese nombre, elimínalo antes de volver a ejecutar el workflow.
 
+Los pushes a `main` ejecutan la misma compilación y preparan la caché de dependencias de Rust para releases posteriores; no adjuntan archivos a ninguna release. La primera compilación o una compilación sin caché puede tardar más.
+
 ## Prueba real de recuperación de GPU
 
 Esta prueba opcional cambia temporalmente la preferencia GPU del usuario actual **solo para la ruta del ejecutable descartable generado**. Simula un fallo después de escribir y luego restaura y verifica el valor anterior del registro. El archivo de registro no debe existir previamente. Conserva el directorio y el registro hasta comprobar la restauración.
