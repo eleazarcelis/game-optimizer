@@ -1,112 +1,80 @@
-# 🎮 Optimizador de Juegos y Lanzadores
+# Game Optimizer
 
-Un potente script de Windows que aplica optimizaciones específicas a juegos, lanzadores y procesos auxiliares para maximizar el rendimiento y minimizar el consumo de recursos.
+Aplicación de escritorio para Windows construida con Tauri 2, React y TypeScript.
 
-## 📋 Descripción General
+> **Trabajo en curso:** se pueden aplicar y restaurar la prioridad de CPU, la preferencia de GPU y los ajustes globales; valores predefinidos elimina los ajustes seleccionados de forma permanente. Las nuevas exclusiones de Defender siguen deshabilitadas mientras se valida la gestión de conflictos entre rutas y usuarios. Todavía no reemplaza completamente los scripts anteriores.
 
-Este optimizador proporciona tres perfiles distintos adaptados para diferentes tipos de aplicaciones:
-- **Perfil Lanzador**: Optimización balanceada para plataformas de juegos (Steam, Epic, Origin, etc.)
-- **Perfil Juego**: Optimización de máximo rendimiento para juegos
-- **Perfil Proceso Secundario**: Configuración estable para anticheats y procesos auxiliares
+## Funcionalidades actuales
 
-## ✨ Características
+- Interfaz en inglés y español.
+- Biblioteca de ejecutables con vista en grilla o lista, iconos de Windows y nombres de los metadatos del ejecutable cuando están disponibles. El aviso de la biblioteca se puede cerrar permanentemente.
+- Agregar ejecutables mediante el selector o arrastrándolos; se asigna un perfil al agregarlos.
+- Abrir la carpeta de un ejecutable o ejecutarlo mediante su botón o icono. En Configuración se elige si la app se minimiza (por defecto) o se cierra tras iniciar correctamente; ejecutar no aplica el perfil automáticamente.
+- Administrar el idioma y el comportamiento al ejecutar en Configuración > General, y los perfiles predeterminados y personalizados en Configuración > Perfiles.
+- Aplicar y restaurar prioridad de CPU y preferencias de GPU con confirmación y diario persistente. La prioridad de CPU requiere permiso de administrador y afecta a procesos futuros con el mismo nombre de ejecutable, también en otras carpetas.
+- Valores predefinidos elimina permanentemente los ajustes habilitados de CPU y GPU y las acciones de CPU/GPU de una optimización activa. Descarta el respaldo de esa optimización y, una vez completado, Restaurar no puede deshacerlo. Si se interrumpe, se conserva información para su recuperación. Las transacciones antiguas de valores predefinidos siguen pudiéndose restaurar o limpiar explícitamente.
+- Las opciones globales de energía, Modo Juego y Game DVR están separadas de los perfiles y, por defecto, no realizan cambios. El plan de energía afecta a todo el equipo y el plan seleccionado debe existir.
+- Las nuevas acciones de Defender están deshabilitadas. Si un perfil existente incluye Defender, la confirmación indica que se omitirá y solo se aplicarán CPU/GPU; el perfil no se modifica. Los diarios de Defender creados sin identidad del recurso no pueden restaurarse automáticamente y requieren inspección manual; los nuevos requieren verificación elevada y rechazan cambios si el recurso fue reemplazado o no es accesible.
+- La biblioteca y los perfiles se guardan en la carpeta de la aplicación dentro de `%LOCALAPPDATA%`. Los logs utilizan el directorio de registros de Tauri para Windows.
 
-### 🚀 Perfil Lanzador
-- **Configuración GPU**: Ajustes balanceados para eficiencia energética
-- **GameBar**: Habilitado para overlays y captura de pantalla
-- **Plan de Energía**: Modo balanceado para consumo óptimo de energía
-- **Impacto**: Fluidez mejorada sin uso extra de recursos
+El estado del perfil refleja los cambios gestionados por la aplicación, no una evaluación de toda la configuración de Windows. Si un ajuste cambia externamente, la restauración se niega a sobrescribirlo; resuelve el conflicto antes de reintentar. No elimines los datos de la aplicación ni una entrada con cambios pendientes de recuperación. Solo una instancia puede acceder a los datos a la vez. Las reservas de recursos del equipo se guardan en `%PROGRAMDATA%\GameOptimizer\resources`; no las elimines mientras haya cambios activos.
 
-### 🎯 Perfil Juego
-- **Configuración GPU**: Modo alto rendimiento (siempre usa GPU dedicada)
-- **Windows Defender**: Excluye carpeta del juego y ejecutable del escaneo en tiempo real
-- **GameDVR**: Deshabilitado para eliminar lag de grabación
-- **GameBar**: Habilitado para activación automática del Modo Juego
-- **Plan de Energía**: Alto rendimiento (CPU y GPU a máxima capacidad)
-- **Impacto**: Máximos FPS, latencia reducida, experiencia de juego sin interrupciones
+Las acciones globales modifican `AutoGameModeEnabled` y `GameDVR_Enabled` del usuario actual de Windows; su efectividad depende de Windows y de las directivas existentes. El diario guarda los valores y tipos anteriores antes de escribir. Tras una interrupción, usa Restaurar en ajustes globales; los cambios externos no se sobrescriben.
 
-### 🛡️ Perfil Proceso Secundario
-- **Configuración GPU**: Ajustes balanceados (no interfiere con el juego principal)
-- **GameBar**: Deshabilitado para evitar conflictos con anticheats
-- **Plan de Energía**: Modo balanceado (no compite por recursos del sistema)
-- **Impacto**: Máxima estabilidad, previene falsos positivos con sistemas anticheat
+Los scripts anteriores, su documentación y sus pruebas están en [legacy-scripts](./legacy-scripts/).
 
-## 🔄 Opciones de Reversión
+## Desarrollo
 
-Todas las configuraciones pueden revertirse completamente para restaurar la configuración predeterminada de Windows:
-- **Revertir Lanzador**: Elimina todas las optimizaciones específicas del lanzador
-- **Revertir Juego**: Elimina todas las optimizaciones de juego y restaura configuraciones de seguridad predeterminadas
-- **Revertir Proceso Secundario**: Restaura configuración predeterminada para procesos auxiliares
+Requisitos: Windows, Node.js, Rust con toolchain MSVC, herramientas de compilación de Visual C++ y WebView2 Runtime.
 
-## 🛠️ Uso
+Si Cargo está instalado mediante rustup pero no se encuentra `cargo`, reinicia VS Code o añádelo a la sesión actual de PowerShell:
 
-1. **Ejecuta el script apropiado**:
-   - `game-optimizer-en.bat` (versión en inglés)
-   - `game-optimizer-es.bat` (versión en español)
+```powershell
+$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+cargo --version
+```
 
-2. **Selecciona tu perfil deseado** (1-6):
-   - Opciones 1-3: Configurar optimizaciones
-   - Opciones 4-6: Revertir configuraciones
+Si `cargo --version` sigue fallando, instala Rust con rustup y vuelve a abrir la terminal.
 
-3. **Proporciona la ruta completa** del ejecutable que deseas optimizar
+```powershell
+npm install
+npm run tauri dev
+```
 
-4. **Permisos de administrador** pueden ser requeridos para optimizaciones del Perfil Juego
+Para las pruebas del frontend ejecuta `npm test`; para las pruebas nativas, `cargo test --manifest-path src-tauri\Cargo.toml`.
 
-## ⚠️ Notas Importantes
+Para generar un ejecutable portable sin instalador:
 
-- **Todos los cambios son PERMANENTES** hasta que se reviertan manualmente usando las opciones de reversión
-- **El Perfil Juego requiere privilegios de Administrador** para exclusiones de Windows Defender y optimizaciones a nivel de sistema
-- **Siempre respalda tu sistema** antes de aplicar optimizaciones
-- **Prueba las configuraciones** con tus juegos específicos y configuración de hardware
+```powershell
+npm run tauri build -- --no-bundle
+```
 
-## 🖥️ Requisitos del Sistema
+El ejecutable se genera en `src-tauri\target\release`. WebView2 Runtime debe estar instalado en el equipo de destino. Los datos permanecen en el equipo, no junto al ejecutable.
 
-- **Sistema Operativo**: Windows 10 (probado)
-- **PowerShell**: Requerido para configuraciones avanzadas
-- **Derechos de Administrador**: Requeridos para optimizaciones del Perfil Juego
+## Publicar una release
 
-## ⚡ Beneficios de Rendimiento
+Cuando el workflow esté en la rama predeterminada, actualiza la versión en `package.json` y `package-lock.json` y publica una release de GitHub con una etiqueta coincidente como `v1.2.3` o `v1.2.3-rc.1` (no se admiten metadatos de compilación como `+build`). El workflow descarga esa etiqueta, verifica que coincida con `package.json`, compila un ejecutable portable para Windows x64 y adjunta `Game-Optimizer-<etiqueta>-windows-x64.exe` a la release. Tauri lee de `package.json` la versión mostrada en la app y los metadatos de versión del ejecutable; cada componente numérico debe ser como máximo 65535. Las releases en borrador se compilan al publicarlas. Si ya existe un archivo con ese nombre, elimínalo antes de volver a ejecutar el workflow.
 
-### Perfil Lanzador
-- Tiempo de inicio del lanzador reducido
-- Menor uso de recursos en segundo plano
-- Capacidad de respuesta del sistema mantenida
+## Prueba real de recuperación de GPU
 
-### Perfil Juego
-- **Aumento de FPS**: Mejora del 5-15% en la mayoría de juegos
-- **Lag de Entrada Reducido**: Menor latencia para juegos competitivos
-- **Eliminación de Interrupciones**: Sin escaneos de Windows Defender durante el juego
-- **Entrega de Energía Optimizada**: CPU y GPU funcionan a máximo rendimiento
+Esta prueba opcional cambia temporalmente la preferencia GPU del usuario actual **solo para la ruta del ejecutable descartable generado**. Simula un fallo después de escribir y luego restaura y verifica el valor anterior del registro. El archivo de registro no debe existir previamente. Conserva el directorio y el registro hasta comprobar la restauración.
 
-### Perfil Proceso Secundario
-- **Compatibilidad con Anticheat**: Previene conflictos con sistemas de protección de juegos
-- **Estabilidad del Sistema**: Mantiene asignación balanceada de recursos
-- **Sin Falsos Positivos**: Reduce problemas de detección de anticheat
+```powershell
+$id = [guid]::NewGuid().ToString('N')
+$dir = Join-Path $env:TEMP "GameOptimizerTest-$id"
+New-Item -ItemType Directory -Path $dir | Out-Null
+$env:GAME_OPTIMIZER_DUMMY_EXE = Join-Path $dir "dummy-$id.exe"
+$env:GAME_OPTIMIZER_TEST_JOURNAL = Join-Path $dir 'journal.json'
+rustc --edition 2021 tests\fixtures\dummy.rs -o $env:GAME_OPTIMIZER_DUMMY_EXE
+cargo test --manifest-path src-tauri\Cargo.toml real_dummy_gpu_preference_recovers_after_a_partial_failure -- --ignored --nocapture
+```
 
-## 🔧 Detalles Técnicos
+Si se interrumpe o falla la restauración, conserva el mismo `GAME_OPTIMIZER_TEST_JOURNAL` y ejecuta:
 
-El optimizador modifica los siguientes componentes de Windows:
-- **Preferencias GPU**: Entradas de registro DirectX UserGpuPreferences
-- **Game Config Store**: Configuraciones del Modo Juego de Windows
-- **Windows Defender**: Exclusiones de protección en tiempo real
-- **Gestión de Energía**: Configuraciones del plan de energía del sistema
-- **GameDVR**: Características de grabación de juegos de Windows
+```powershell
+cargo test --manifest-path src-tauri\Cargo.toml recover_dummy_gpu_journal -- --ignored --nocapture
+```
 
-## 📝 Información de Versión
+## Pendiente
 
-- **Versión**: 1.0.0
-- **Autor**: Ele
-- **GitHub**: https://github.com/eleazarcelis
-- **Probado En**: Windows 10
-
-## ⚠️ Descargo de Responsabilidad
-
-Esta herramienta ha sido **probada exclusivamente en Windows 10**. La compatibilidad con otras versiones de Windows no está garantizada. Úsala bajo tu propio riesgo y siempre crea puntos de restauración del sistema antes de aplicar optimizaciones.
-
-## 🤝 Contribuir
-
-Siéntete libre de reportar problemas, sugerir mejoras o contribuir al proyecto a través del repositorio de GitHub.
-
-## 📄 Licencia
-
-Este proyecto es de código abierto. Por favor, consulta el repositorio para detalles de la licencia.
+Las instantáneas de Defender registran el volumen y el identificador de archivo de Windows; las reservas basadas en esa identidad reconocen enlaces duros al mismo archivo. Las acciones de Defender en perfiles siguen deshabilitadas: aún no se gestionan las carpetas superpuestas ni la coordinación segura entre usuarios. La restauración de CPU recupera el valor de prioridad, pero puede dejar claves IFEO vacías creadas al aplicar el ajuste. También faltan pruebas exhaustivas de interfaz e interrupciones.

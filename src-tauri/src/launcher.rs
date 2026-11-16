@@ -1,0 +1,140 @@
+use crate::{AppError, error, executable};
+use std::{ffi::OsStr, os::windows::ffi::OsStrExt, path::Path};
+use windows_sys::Win32::{
+    System::Com::{
+        COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize,
+    },
+    UI::Shell::{SHELLEXECUTEINFOW, ShellExecuteExW},
+};
+
+fn open(path: &Path, working_directory: Option<&Path>, code: &'static str) -> Result<(), AppError> {
+    log::info!("Opening a Windows shell target");
+    let result = unsafe {
+        CoInitializeEx(
+            std::ptr::null(),
+            (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32,
+        )
+    };
+    if result < 0 {
+        return Err(error(
+            code,
+            format!("COM initialization failed: {result:#x}"),
+        ));
+    }
+    struct ComGuard;
+    impl Drop for ComGuard {
+        fn drop(&mut self) {
+            unsafe { CoUninitialize() };
+        }
+    }
+    let _guard = ComGuard;
+    let wide = |s: &OsStr| {
+        s.encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>()
+    };
+    let file = wide(path.as_os_str());
+    let directory = working_directory.map(|p| wide(p.as_os_str()));
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        lpFile: file.as_ptr(),
+        lpDirectory: directory.as_ref().map_or(std::ptr::null(), |d| d.as_ptr()),
+        nShow: 1,
+        ..Default::default()
+    };
+    if unsafe { ShellExecuteExW(&mut info) } == 0 {
+        return Err(error(code, std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+pub fn launch(path: &str) -> Result<(), AppError> {
+    log::info!("Launching executable");
+    let path = executable(path)?;
+    let directory = path
+        .parent()
+        .ok_or_else(|| error("LAUNCH_FAILED", "Executable has no parent directory"))?;
+    open(&path, Some(directory), "LAUNCH_FAILED")
+}
+
+pub fn open_folder(path: &str) -> Result<(), AppError> {
+    log::info!("Opening executable folder");
+    let path = Path::new(path);
+    if !path.is_absolute()
+        || !path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
+    {
+        return Err(error("INVALID_EXECUTABLE", "Select an absolute .exe path"));
+    }
+    let folder = path
+        .parent()
+        .filter(|parent| parent.is_dir())
+        .ok_or_else(|| error("FOLDER_OPEN", "Executable folder does not exist"))?;
+    open(folder, None, "FOLDER_OPEN")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn launch_and_folder_reject_invalid_paths() {
+        assert_eq!(
+            launch("relative.exe").unwrap_err().code,
+            "INVALID_EXECUTABLE"
+        );
+        assert_eq!(
+            open_folder("relative.exe").unwrap_err().code,
+            "INVALID_EXECUTABLE"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let invalid = dir.path().join("not-executable.exe");
+        std::fs::write(&invalid, b"not a program").unwrap();
+        assert_eq!(
+            launch(invalid.to_str().unwrap()).unwrap_err().code,
+            "LAUNCH_FAILED"
+        );
+        let missing = dir.path().join("missing").join("game.exe");
+        assert_eq!(
+            open_folder(missing.to_str().unwrap()).unwrap_err().code,
+            "FOLDER_OPEN"
+        );
+    }
+
+    #[test]
+    #[ignore = "compiles and launches a disposable executable"]
+    fn launch_disposable_executable() {
+        let dir = tempfile::Builder::new()
+            .prefix("game optimizer launch ")
+            .tempdir()
+            .unwrap();
+        let path = dir.path().join("test game.exe");
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("tests")
+            .join("fixtures")
+            .join("launch_dummy.rs");
+        assert!(
+            std::process::Command::new("rustc")
+                .arg(source)
+                .arg("-o")
+                .arg(&path)
+                .status()
+                .unwrap()
+                .success()
+        );
+        launch(path.to_str().unwrap()).unwrap();
+        let marker = dir.path().join("launch-marker.txt");
+        for _ in 0..100 {
+            if marker.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(
+            std::fs::read_to_string(marker).unwrap(),
+            dir.path().to_string_lossy()
+        );
+    }
+}

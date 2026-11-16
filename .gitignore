@@ -30,3 +30,8 @@ $RECYCLE.BIN/
 
 # Windows shortcuts
 *.lnk
+
+# Tauri / Vite build outputs
+node_modules/
+dist/
+src-tauri/target/

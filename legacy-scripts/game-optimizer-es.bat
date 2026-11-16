@@ -66,12 +66,14 @@ echo ==============================================
 echo.
 echo [1] LANZADOR - Optimizacion basica para plataformas de juegos:
 echo     ^* GPU: Configuracion balanceada (ahorra energia)
+echo     ^* CPU: Prioridad baja para nuevas ejecuciones
 echo     ^* GameBar: Activado (permite overlays y capturas)
 echo     ^* Plan energia: Balanceado (eficiencia energetica)
 echo     ^* IMPACTO: Mejora fluidez sin consumir recursos extra
 echo.
 echo [2] JUEGO - Optimizacion maxima para rendimiento:
 echo     ^* GPU: Alto rendimiento (usa GPU dedicada siempre)
+echo     ^* CPU: Prioridad alta para nuevas ejecuciones
 echo     ^* Windows Defender: Excluye carpeta y ejecutable del escaneo
 echo     ^* GameDVR: Desactivado (elimina lag de grabacion)
 echo     ^* GameBar: Activado para modo juego automatico
@@ -80,12 +82,13 @@ echo     ^* IMPACTO: Maximos FPS, menor latencia, sin interrupciones
 echo.
 echo [3] PROCESO SECUNDARIO - Configuracion para anticheats/auxiliares:
 echo     ^* GPU: Configuracion balanceada (no interfiere con juego)
+echo     ^* CPU: Sin cambios
 echo     ^* GameBar: Desactivado (evita conflictos con anticheats)
 echo     ^* Plan energia: Balanceado (no compite por recursos)
 echo     ^* IMPACTO: Estabilidad maxima, sin falsos positivos
 echo.
-echo [4-6] OPCIONES REVERTIR: Eliminan TODAS las configuraciones aplicadas
-echo       y restauran valores por defecto del sistema.
+echo [4-6] OPCIONES REVERTIR: Restauran la prioridad CPU anterior y aplican
+echo       valores predefinidos a las demas configuraciones.
 echo.
 echo ==============================================
 echo  SELECCIONA UNA OPCION
@@ -175,6 +178,40 @@ echo Carpeta: "%folder%"
 echo Nombre: "%exename%"
 echo.
 
+:: La prioridad CPU se aplica por nombre de ejecutable, no por ruta.
+set "cpu_action="
+set "cpu_profile="
+if "%perfil%"=="1" (
+    set "cpu_action=Configure"
+    set "cpu_profile=Launcher"
+)
+if "%perfil%"=="2" (
+    set "cpu_action=Configure"
+    set "cpu_profile=Game"
+)
+if "%perfil%"=="4" (
+    set "cpu_action=Revert"
+    set "cpu_profile=Launcher"
+)
+if "%perfil%"=="5" (
+    set "cpu_action=Revert"
+    set "cpu_profile=Game"
+)
+if defined cpu_action (
+    echo [*] Prioridad CPU: afecta nuevas ejecuciones con este nombre,
+    echo     incluso en otras carpetas. Requiere permisos de administrador.
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0cpu-priority.ps1" -Action !cpu_action! -Profile !cpu_profile!
+    if errorlevel 2 (
+        call :log_warning "No hay copia previa de prioridad CPU; se conserva el valor actual."
+    ) else if errorlevel 1 (
+        call :log_error "No se pudo aplicar o restaurar la prioridad CPU. No se aplicaron los demas cambios."
+        pause
+        exit /b 1
+    ) else (
+        call :log_info "Prioridad CPU procesada correctamente"
+    )
+)
+
 :: =====================================================
 :: Configurar/Revertir GPU
 :: =====================================================
@@ -258,6 +295,7 @@ goto :end_script
     :: GAME PROFILE
     call :log_info "Iniciando optimizaciones avanzadas para perfil de juego"
     echo [*] Creando optimizaciones avanzadas...
+    echo [!] Defender: se excluiran la carpeta y el ejecutable del escaneo.
     
     set "ps1=%temp%\gameopt.ps1"
     call :log_debug "Creando script PowerShell: %ps1%"

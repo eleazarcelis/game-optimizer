@@ -1,112 +1,80 @@
-# 🎮 Game and Launcher Optimizer
+# Game Optimizer
 
-A powerful Windows batch script that applies specific optimizations to games, launchers, and auxiliary processes to maximize performance and minimize resource consumption.
+A Windows desktop application built with Tauri 2, React and TypeScript.
 
-## 📋 Overview
+> **Work in progress:** CPU priority, GPU preference and global settings can be applied and restored; defaults removes selected settings permanently. New Defender exclusions remain disabled while cross-path and cross-user conflict handling is validated. This is not yet a complete replacement for the legacy scripts.
 
-This optimizer provides three distinct profiles tailored for different types of applications:
-- **Launcher Profile**: Balanced optimization for gaming platforms (Steam, Epic, Origin, etc.)
-- **Game Profile**: Maximum performance optimization for games
-- **Secondary Process Profile**: Stable configuration for anticheats and auxiliary processes
+## Current features
 
-## ✨ Features
+- English and Spanish UI.
+- Executable library with grid/list views, Windows file icons and names from executable metadata when available. The library notice can be dismissed permanently.
+- Add executables using the file picker or drag and drop; assign a profile when adding.
+- Open an executable's folder or launch it with its button or icon. In Settings, choose whether the app minimizes (default) or closes after a successful launch; starting a game does not automatically apply a profile.
+- Manage language and launch behavior under Settings > General, and built-in and custom profiles under Settings > Profiles.
+- Apply and restore CPU priority and GPU preferences with confirmation and a persistent transaction journal. CPU priority requires administrator approval and affects future processes with the same executable name, including in other folders.
+- Defaults permanently removes the enabled CPU and GPU settings and any CPU/GPU actions in an active optimization. It discards that optimization's backup; once completed, Restore cannot undo it. Interrupted operations retain recovery information. Older defaults transactions remain restorable or can be explicitly cleared with Defaults.
+- Global power, Game Mode and Game DVR options are separate from executable profiles and default to no change. Power changes affect the whole computer and require the selected plan to exist.
+- Defender actions are disabled for new changes. When an existing profile includes Defender, the confirmation explains it will be skipped and only CPU/GPU actions will run; the profile is not changed. Defender journals created without a resource identity cannot be restored automatically and require manual inspection; newer journals require elevated verification and refuse to modify a replaced or inaccessible resource.
+- Library and profile data are stored under the application's `%LOCALAPPDATA%` directory. Application logs use Tauri's Windows log directory.
 
-### 🚀 Launcher Profile
-- **GPU Configuration**: Balanced power settings for energy efficiency
-- **GameBar**: Enabled for overlays and screen capture
-- **Power Plan**: Balanced mode for optimal energy consumption
-- **Impact**: Improved fluidity without extra resource usage
+The profile status reflects changes managed by this application, not an assessment of all existing Windows settings. If a setting changes externally, restoration refuses to overwrite it; resolve the conflict before retrying. Do not delete the application data or an active executable entry while its change requires recovery. Only one instance can access the application data at a time. Machine-wide resource reservations are stored under `%PROGRAMDATA%\GameOptimizer\resources`; do not delete them while changes are active.
 
-### 🎯 Game Profile
-- **GPU Configuration**: High performance mode (always uses dedicated GPU)
-- **Windows Defender**: Excludes game folder and executable from real-time scanning
-- **GameDVR**: Disabled to eliminate recording lag
-- **GameBar**: Enabled for automatic Game Mode activation
-- **Power Plan**: High performance (CPU and GPU at maximum capacity)
-- **Impact**: Maximum FPS, reduced latency, uninterrupted gaming experience
+Global actions update `AutoGameModeEnabled` and `GameDVR_Enabled` for the current Windows user; their effectiveness depends on Windows and policy settings. The previous registry values and types are journaled before each write. If interrupted, use Restore in the global settings page; external changes are not overwritten.
 
-### 🛡️ Secondary Process Profile
-- **GPU Configuration**: Balanced settings (doesn't interfere with main game)
-- **GameBar**: Disabled to avoid conflicts with anticheats
-- **Power Plan**: Balanced mode (doesn't compete for system resources)
-- **Impact**: Maximum stability, prevents false positives with anticheat systems
+The legacy scripts, their documentation and tests are in [legacy-scripts](./legacy-scripts/).
 
-## 🔄 Revert Options
+## Development
 
-All configurations can be completely reverted to restore Windows default settings:
-- **Revert Launcher**: Removes all launcher-specific optimizations
-- **Revert Game**: Removes all game optimizations and restores default security settings
-- **Revert Secondary Process**: Restores default configuration for auxiliary processes
+Requirements: Windows, Node.js, Rust with the MSVC toolchain, Visual C++ build tools and WebView2 Runtime.
 
-## 🛠️ Usage
+If Cargo is installed through rustup but `cargo` is not found, restart VS Code or add it to the current PowerShell session:
 
-1. **Run the appropriate script**:
-   - `game-optimizer-en.bat` (English version)
-   - `game-optimizer-es.bat` (Spanish version)
+```powershell
+$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
+cargo --version
+```
 
-2. **Select your desired profile** (1-6):
-   - Options 1-3: Configure optimizations
-   - Options 4-6: Revert configurations
+If `cargo --version` still fails, install Rust with rustup and reopen the terminal.
 
-3. **Provide the full path** to the executable you want to optimize
+```powershell
+npm install
+npm run tauri dev
+```
 
-4. **Administrator permissions** may be required for Game Profile optimizations
+Run frontend tests with `npm test` and native tests with `cargo test --manifest-path src-tauri\Cargo.toml`.
 
-## ⚠️ Important Notes
+To build a portable executable without an installer:
 
-- **All changes are PERMANENT** until manually reverted using the revert options
-- **Game Profile requires Administrator privileges** for Windows Defender exclusions and system-level optimizations
-- **Always backup your system** before applying optimizations
-- **Test configurations** with your specific games and hardware setup
+```powershell
+npm run tauri build -- --no-bundle
+```
 
-## 🖥️ System Requirements
+The executable is produced under `src-tauri\target\release`. WebView2 Runtime must be installed on the target machine. App data remains on the machine, not beside the executable.
 
-- **Operating System**: Windows 10 (tested)
-- **PowerShell**: Required for advanced configurations
-- **Administrator Rights**: Required for Game Profile optimizations
+## Publishing a release
 
-## ⚡ Performance Benefits
+Once the workflow is on the default branch, update the version in `package.json` and `package-lock.json`, then publish a GitHub release for a matching tag such as `v1.2.3` or `v1.2.3-rc.1` (build metadata such as `+build` is not supported). The workflow checks out that tag, verifies it matches `package.json`, builds a Windows x64 portable executable and attaches `Game-Optimizer-<tag>-windows-x64.exe` to the release. Tauri reads the displayed app version and Windows executable version metadata from `package.json`; each numeric version component must be at most 65535. Draft releases build when published. If an asset with that name already exists, remove it before rerunning the workflow.
 
-### Launcher Profile
-- Reduced launcher startup time
-- Lower background resource usage
-- Maintained system responsiveness
+## Real GPU recovery test
 
-### Game Profile
-- **FPS Increase**: 5-15% improvement in most games
-- **Reduced Input Lag**: Lower latency for competitive gaming
-- **Elimination of Interruptions**: No Windows Defender scans during gameplay
-- **Optimized Power Delivery**: CPU and GPU run at peak performance
+This opt-in test temporarily changes the current user's GPU preference **only for the generated dummy executable path**. It injects a failure after the write, then restores and verifies the previous registry value. The journal must not already exist. Keep the test directory and journal until restoration is confirmed.
 
-### Secondary Process Profile
-- **Anticheat Compatibility**: Prevents conflicts with game protection systems
-- **System Stability**: Maintains balanced resource allocation
-- **No False Positives**: Reduces anticheat detection issues
+```powershell
+$id = [guid]::NewGuid().ToString('N')
+$dir = Join-Path $env:TEMP "GameOptimizerTest-$id"
+New-Item -ItemType Directory -Path $dir | Out-Null
+$env:GAME_OPTIMIZER_DUMMY_EXE = Join-Path $dir "dummy-$id.exe"
+$env:GAME_OPTIMIZER_TEST_JOURNAL = Join-Path $dir 'journal.json'
+rustc --edition 2021 tests\fixtures\dummy.rs -o $env:GAME_OPTIMIZER_DUMMY_EXE
+cargo test --manifest-path src-tauri\Cargo.toml real_dummy_gpu_preference_recovers_after_a_partial_failure -- --ignored --nocapture
+```
 
-## 🔧 Technical Details
+If interrupted or restoration fails, keep the same `GAME_OPTIMIZER_TEST_JOURNAL` and run:
 
-The optimizer modifies the following Windows components:
-- **GPU Preferences**: DirectX UserGpuPreferences registry entries
-- **Game Config Store**: Windows Game Mode settings
-- **Windows Defender**: Real-time protection exclusions
-- **Power Management**: System power plan configurations
-- **GameDVR**: Windows game recording features
+```powershell
+cargo test --manifest-path src-tauri\Cargo.toml recover_dummy_gpu_journal -- --ignored --nocapture
+```
 
-## 📝 Version Information
+## Pending work
 
-- **Version**: 1.0.0
-- **Author**: Ele
-- **GitHub**: https://github.com/eleazarcelis
-- **Tested On**: Windows 10
-
-## ⚠️ Disclaimer
-
-This tool has been **tested exclusively on Windows 10**. Compatibility with other Windows versions is not guaranteed. Use at your own risk and always create system restore points before applying optimizations.
-
-## 🤝 Contributing
-
-Feel free to report issues, suggest improvements, or contribute to the project through the GitHub repository.
-
-## 📄 License
-
-This project is open source. Please check the repository for license details.
+Defender resource snapshots record the Windows volume and file ID, and identity-based reservations recognize hard links to the same file. Defender profile actions remain disabled: overlapping folders and secure cross-user coordination are not yet handled. CPU restoration restores the priority value but can leave empty IFEO registry keys created during application. Comprehensive UI and interruption testing is still needed.

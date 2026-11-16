@@ -1,0 +1,65 @@
+name: Build release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate release version
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          $pattern = '^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?$'
+          if ($env:RELEASE_TAG -cnotmatch $pattern) {
+            throw "Release tag must be a version such as v1.2.3 or v1.2.3-rc.1."
+          }
+          foreach ($part in $Matches[1], $Matches[2], $Matches[3]) {
+            if ([decimal]$part -gt 65535) { throw "Windows version components must not exceed 65535." }
+          }
+          $version = $env:RELEASE_TAG.Substring(1)
+          $packageVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($version -cne $packageVersion) {
+            throw "Release tag version $version does not match package.json version $packageVersion."
+          }
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run frontend tests
+        run: npm test
+
+      - name: Build portable executable
+        shell: pwsh
+        run: npm run tauri build -- --no-bundle -- --locked
+
+      - name: Attach executable to release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          $asset = "Game-Optimizer-$env:RELEASE_TAG-windows-x64.exe"
+          Copy-Item 'src-tauri\target\release\game-optimizer-app.exe' $asset
+          gh release upload $env:RELEASE_TAG $asset
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
