@@ -1,33 +1,35 @@
 # Game Optimizer
 
-Aplicación de escritorio para Windows construida con Tauri 2, React y TypeScript.
+Español | [English](./README.md)
 
-> **Trabajo en curso:** se pueden aplicar y restaurar la prioridad de CPU, la preferencia de GPU, las exclusiones opcionales de Defender y los ajustes globales; valores predefinidos elimina los ajustes de CPU y GPU seleccionados de forma permanente. Todavía no reemplaza completamente los scripts anteriores.
+Game Optimizer es una aplicación de escritorio para Windows que organiza juegos y ayuda a gestionar cómo se ejecutan sus procesos en Windows. Modifica ajustes seleccionados del sistema; **no cambia la configuración gráfica del juego**, como la resolución, la calidad visual o los efectos. Los resultados dependen del juego, el equipo y Windows; no se garantiza una mejora de rendimiento o FPS.
+
+> **Trabajo en curso:** la aplicación todavía no reemplaza todas las funciones de los scripts anteriores.
 
 ## Funcionalidades actuales
 
-- Interfaz en inglés y español.
-- Biblioteca en grilla con iconos de Windows y nombres de metadatos, favoritos primero, orden A–Z/Z–A o manual y agrupamiento opcional y colapsable por nombres relacionados. La agrupación usa una heurística de prefijos y puede no acertar siempre. El orden manual se guarda; los controles de arrastre también admiten las flechas del teclado. El aviso de la biblioteca se puede cerrar permanentemente.
-- En orden manual se puede arrastrar la tarjeta o usar su control con el teclado. Al agrupar, los grupos con favoritos aparecen primero y sus favoritos se muestran al inicio. El orden manual respeta esa prioridad y permite ordenar dentro de un grupo o mover el grupo completo desde su control.
-- Al arrastrar, una línea marca la posición exacta de inserción; no se muestra si la posición no cambia el orden o no está permitida.
-- Ventana con navegación y encabezados fijos: solo se desplaza el contenido de los paneles, con barras de desplazamiento de estilo oscuro/violeta y acceso por teclado.
-- Agregar ejecutables mediante el selector o arrastrándolos; se asigna un perfil al agregarlos.
-- Abrir la carpeta de un ejecutable o ejecutarlo mediante su botón o icono. En Configuración se elige si la app se minimiza (por defecto) o se cierra tras iniciar correctamente; ejecutar no aplica el perfil automáticamente.
-- Administrar el idioma y el comportamiento al ejecutar en Configuración > General, los perfiles predeterminados y personalizados en Configuración > Perfiles, y consultar la versión en Configuración > Acerca de.
-- En Configuración > Acerca de se puede buscar la última versión estable en GitHub. La búsqueda automática está desactivada por defecto; al activarla, la app consulta al iniciar y avisa sin descargar. Otro botón abre en el navegador la descarga del ejecutable portátil Windows x64 cuando está disponible; reemplaza el ejecutable anterior manualmente. No se instala ni se verifica la firma automáticamente.
-- Aplicar y restaurar prioridad de CPU y preferencias de GPU con confirmación y diario persistente. La prioridad de CPU requiere permiso de administrador y afecta a procesos futuros con el mismo nombre de ejecutable, también en otras carpetas.
-- Valores predefinidos elimina permanentemente los ajustes habilitados de CPU y GPU y las acciones de CPU/GPU de una optimización activa. Descarta el respaldo de esa optimización y, una vez completado, Restaurar no puede deshacerlo. Si se interrumpe, se conserva información para su recuperación. Las transacciones antiguas de valores predefinidos siguen pudiéndose restaurar o limpiar explícitamente.
-- Las opciones globales de energía, Modo Juego y Game DVR están separadas de los perfiles y, por defecto, no realizan cambios. El plan de energía afecta a todo el equipo y el plan seleccionado debe existir.
-- Las exclusiones de Defender son opcionales y están desactivadas por defecto. Al optimizar se excluyen la carpeta completa del ejecutable y los archivos abiertos por ese proceso, lo que reduce la protección antivirus; requiere aprobaciones de administrador. Se rechazan perfiles activos con carpetas superpuestas o ejecutables que comparten identidad física, incluso entre usuarios. Restaurar conserva las exclusiones preexistentes y verifica los cambios con elevación. El estado se muestra como no verificado hasta restaurar. Valores predefinidos no modifica Defender: restaura primero una optimización que lo incluya. Los diarios antiguos sin identidad del recurso requieren inspección manual.
-- La biblioteca y los perfiles se guardan en la carpeta de la aplicación dentro de `%LOCALAPPDATA%`. Los logs utilizan el directorio de registros de Tauri para Windows.
+- **Biblioteca:** Agrega ejecutables de Windows con el selector o arrastrándolos y asigna un perfil a cada uno. Desde su tarjeta puedes iniciar un juego o abrir su carpeta. Iniciarlo no aplica el perfil automáticamente.
+- **Organización:** Elige una grilla o lista, marca favoritos, ordena por nombre o acomoda los elementos manualmente. Puedes agrupar nombres relacionados, aunque la agrupación automática puede equivocarse. El orden manual también admite el teclado; los favoritos permanecen primero.
+- **Perfiles:** En Configuración > Perfiles, ajusta los perfiles incluidos o crea los tuyos. Un perfil puede solicitar una prioridad de CPU y una preferencia de GPU para un ejecutable. La prioridad de CPU afecta a futuras ejecuciones con el mismo nombre, incluso en otras carpetas, y requiere permiso de administrador. La preferencia de GPU solicita a Windows qué GPU usar; Windows o la aplicación pueden elegir otra.
+- **Aplicar y restaurar:** Usa Optimizar en una tarjeta para aplicar su perfil y Restaurar para recuperar los ajustes anteriores guardados. Confirma los cambios antes de aplicarlos. El estado refleja los cambios gestionados por esta aplicación, no toda la configuración de Windows.
+- **Valores predefinidos:** Esta acción elimina los ajustes de CPU y GPU seleccionados y descarta el respaldo correspondiente. Una vez completada, Restaurar no puede deshacerla. No elimina exclusiones de Defender; restaura primero una optimización que las incluya.
+- **Defender:** Las exclusiones son opcionales y están desactivadas por defecto. Al activarlas se excluyen del análisis toda la carpeta del ejecutable y los archivos abiertos por ese proceso, lo que reduce la protección. Se requiere permiso de administrador; el estado permanece sin verificar hasta que Restaurar lo compruebe.
+- **Optimizaciones globales:** El plan de energía, Modo Juego y Game DVR están separados de los perfiles y no realizan cambios por defecto. El plan de energía afecta a todo el equipo y el plan elegido debe existir. Game DVR controla la grabación de Windows, no los gráficos del juego.
+- **Configuración y actualizaciones:** Elige inglés o español y si la app se minimiza o cierra tras iniciar correctamente. En Configuración > Acerca de puedes buscar la última versión estable o abrir GitHub para reportar errores y sugerir mejoras. La búsqueda opcional al iniciar está desactivada por defecto y solo avisa. La descarga abre en el navegador el ejecutable portátil para Windows x64; reemplaza el anterior manualmente. La instalación y la verificación de firma no son automáticas.
 
-El estado del perfil refleja los cambios gestionados por la aplicación, no una evaluación de toda la configuración de Windows. Si se detecta que un ajuste cambió externamente, la restauración se niega a sobrescribirlo; resuelve el conflicto antes de reintentar. No elimines los datos de la aplicación ni una entrada con cambios pendientes de recuperación. Solo una instancia puede acceder a los datos a la vez. Las reservas del equipo se guardan en `%PROGRAMDATA%\GameOptimizer\resources` y las nuevas reservas de Defender en `%PROGRAMDATA%\GameOptimizer-Defender-2739818f`; no las elimines mientras haya cambios activos. Restaura las transacciones antiguas de Defender antes de crear nuevas exclusiones.
+Si un ajuste de Windows cambió por otro medio, Restaurar no sobrescribe ese cambio. Si una operación se interrumpe o necesita recuperación, conserva los datos de la app y la entrada de la biblioteca y usa Restaurar. Solo una instancia puede acceder a los datos de la app a la vez.
 
-No muevas ni redirijas las carpetas o enlaces del ejecutable mientras se aplica o restaura una exclusión. Las reservas coordinan esta aplicación, pero Windows u otros programas pueden modificar Defender por separado.
+Los [scripts anteriores](./legacy-scripts/) son independientes de la aplicación de escritorio y tienen otros comportamientos y riesgos.
+
+## Detalles de implementación y recuperación
+
+La app está construida con Tauri 2, React y TypeScript. La biblioteca, los perfiles y los diarios de transacciones se guardan en la carpeta de la aplicación dentro de `%LOCALAPPDATA%`; los logs usan el directorio de registros de Tauri para Windows. Reemplazar el ejecutable portátil en la misma cuenta de Windows no elimina esos archivos.
+
+Valores predefinidos elimina permanentemente los ajustes de CPU/GPU habilitados, incluidos los de una optimización activa, y descarta el respaldo correspondiente. Si se interrumpe, se conserva información para su recuperación. Las transacciones antiguas de valores predefinidos siguen pudiéndose restaurar o limpiar explícitamente.
+
+La restauración de Defender conserva las exclusiones preexistentes y verifica los cambios con elevación. Se rechazan perfiles activos con carpetas superpuestas o ejecutables con la misma identidad física, incluso entre usuarios. Los diarios antiguos sin identidad del recurso requieren inspección manual. No muevas ni redirijas las carpetas o enlaces del ejecutable mientras se aplica o restaura una exclusión. Las reservas del equipo se guardan en `%PROGRAMDATA%\GameOptimizer\resources` y las nuevas reservas de Defender en `%PROGRAMDATA%\GameOptimizer-Defender-2739818f`; no las elimines mientras haya cambios activos. Restaura las transacciones antiguas de Defender antes de crear nuevas exclusiones. Estas reservas coordinan la aplicación, pero Windows u otros programas pueden modificar Defender por separado.
 
 Las acciones globales modifican `AutoGameModeEnabled` y `GameDVR_Enabled` del usuario actual de Windows; su efectividad depende de Windows y de las directivas existentes. El diario guarda los valores y tipos anteriores antes de escribir. Tras una interrupción, usa Restaurar en ajustes globales; los cambios externos no se sobrescriben.
-
-Los scripts anteriores, su documentación y sus pruebas están en [legacy-scripts](./legacy-scripts/).
 
 ## Licencia
 

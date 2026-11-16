@@ -28,4 +28,24 @@ describe("About update controls", () => {
     expect(html).toContain("GNU GENERAL PUBLIC LICENSE");
     expect(html).toContain("github.com/eleazarcelis/game-optimizer");
   });
+  it("explains the Windows process focus and graphics limitation in both languages", () => {
+    const state = initialState();
+    const render = () => renderToStaticMarkup(
+      <Settings state={state} update={() => {}} showError={() => {}} initialTab="about" updateStatus={{ kind: "idle" }} checkUpdates={() => {}} />,
+    );
+    expect(render()).toContain("manage how their processes run in Windows");
+    expect(render()).toContain("does not change in-game graphics settings");
+    state.language = "es";
+    expect(render()).toContain("cómo se ejecutan sus procesos en Windows");
+    expect(render()).toContain("no cambia los ajustes gráficos del juego");
+  });
+  it("offers a GitHub issue button in both languages", () => {
+    const state = initialState();
+    const render = () => renderToStaticMarkup(
+      <Settings state={state} update={() => {}} showError={() => {}} initialTab="about" updateStatus={{ kind: "idle" }} checkUpdates={() => {}} />,
+    );
+    expect(render()).toContain("Report a bug or suggest an improvement");
+    state.language = "es";
+    expect(render()).toContain("Reportar errores o sugerir mejoras");
+  });
 });

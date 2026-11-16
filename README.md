@@ -1,33 +1,35 @@
 # Game Optimizer
 
-A Windows desktop application built with Tauri 2, React and TypeScript.
+[Español](./README-ES.md) | English
 
-> **Work in progress:** CPU priority, GPU preference, optional Defender exclusions and global settings can be applied and restored; defaults removes selected CPU and GPU settings permanently. This is not yet a complete replacement for the legacy scripts.
+Game Optimizer is a Windows desktop app for organizing games and managing how their processes run in Windows. It changes selected Windows settings; **it does not change a game's graphics settings**, such as resolution, visual quality or effects. Results depend on the game, hardware and Windows; improved performance or FPS is not guaranteed.
+
+> **Work in progress:** The app does not yet replace all features of the legacy scripts.
 
 ## Current features
 
-- English and Spanish UI.
-- Grid library with Windows icons and executable metadata names, favorites first, A–Z/Z–A or manual ordering, and optional collapsible groups of related names. Grouping uses a name-prefix heuristic and may not always match correctly. Manual order is saved; drag handles also support arrow keys. The library notice can be dismissed permanently.
-- In manual mode, drag a card or use its keyboard handle. With grouping enabled, groups containing favorites come first and favorite members appear first within their group. Manual reordering stays within the favorite/non-favorite priority and within a group, while group handles move whole groups.
-- While dragging, a line marks the exact insertion position; it is hidden for positions that would not change the order or are not allowed.
-- Fixed navigation and page headers: only panel contents scroll, with dark/purple scrollbars and keyboard access.
-- Add executables using the file picker or drag and drop; assign a profile when adding.
-- Open an executable's folder or launch it with its button or icon. In Settings, choose whether the app minimizes (default) or closes after a successful launch; starting a game does not automatically apply a profile.
-- Manage language and launch behavior under Settings > General, built-in and custom profiles under Settings > Profiles, and view the app version under Settings > About.
-- Settings > About can check GitHub for the latest stable release. Automatic checks are off by default; when enabled, the app checks at startup and notifies you without downloading. A separate button opens the Windows x64 portable executable download in your browser when available; replace the old executable manually. No automatic installation or signature verification is provided.
-- Apply and restore CPU priority and GPU preferences with confirmation and a persistent transaction journal. CPU priority requires administrator approval and affects future processes with the same executable name, including in other folders.
-- Defaults permanently removes the enabled CPU and GPU settings and any CPU/GPU actions in an active optimization. It discards that optimization's backup; once completed, Restore cannot undo it. Interrupted operations retain recovery information. Older defaults transactions remain restorable or can be explicitly cleared with Defaults.
-- Global power, Game Mode and Game DVR options are separate from executable profiles and default to no change. Power changes affect the whole computer and require the selected plan to exist.
-- Defender exclusions are optional and disabled by default. Optimization excludes the executable's entire folder and files opened by that process, reducing antivirus protection; administrator approvals are required. Active profiles with overlapping folders or physically identical executables are rejected, including across users. Restore preserves preexisting exclusions and verifies changes with elevation. Status remains unverified until restoration. Defaults does not change Defender: restore an optimization that includes it first. Older journals without resource identities require manual inspection.
-- Library and profile data are stored under the application's `%LOCALAPPDATA%` directory. Application logs use Tauri's Windows log directory.
+- **Library:** Add Windows executables with the file picker or by dragging them in, and assign each a profile. Launch a game or open its folder from its card. Launching does not apply the profile automatically.
+- **Organization:** Choose a grid or list, mark favorites, sort by name or arrange items manually. Related names can be grouped, although automatic grouping may not always match. Manual ordering also works with the keyboard; favorites stay first.
+- **Profiles:** Under Settings > Profiles, adjust the built-in profiles or create your own. A profile can request a CPU priority and GPU preference for an executable. CPU priority applies to future processes with the same executable name, including in other folders, and requires administrator permission. The GPU preference asks Windows which GPU to use; Windows or the app may choose differently.
+- **Apply and restore:** Use Optimize on a library card to apply its profile, and Restore to return to the saved previous settings. Confirm changes before applying them. Status describes changes managed by this app, not all Windows settings.
+- **Defaults:** This action removes the selected CPU and GPU settings and discards the corresponding saved backup. Once completed, Restore cannot undo it. It does not remove Defender exclusions; restore an optimization that includes them first.
+- **Defender:** Exclusions are optional and off by default. Enabling them excludes the executable's entire folder and files opened by that process from scanning, reducing protection. Administrator approval is required; the status remains unverified until Restore checks it.
+- **Global optimizations:** Power plan, Game Mode and Game DVR are separate from profiles and do nothing by default. The power plan affects the entire computer and the chosen plan must exist. Game DVR controls Windows recording, not game graphics.
+- **Settings and updates:** Choose English or Spanish and whether the app minimizes or closes after a successful launch. Under Settings > About, check for the latest stable release on GitHub or open GitHub to report a bug or suggest an improvement. Optional startup checks are off by default and only notify you. Downloading opens the portable Windows x64 executable in your browser; replace the old executable manually. Installation and signature verification are not automatic.
 
-The profile status reflects changes managed by this application, not an assessment of all existing Windows settings. If an external setting change is detected, restoration refuses to overwrite it; resolve the conflict before retrying. Do not delete the application data or an active executable entry while its change requires recovery. Only one instance can access the application data at a time. Machine-wide reservations are stored in `%PROGRAMDATA%\GameOptimizer\resources` and new Defender reservations in `%PROGRAMDATA%\GameOptimizer-Defender-2739818f`; do not delete them while changes are active. Restore older Defender transactions before creating new exclusions.
+If Windows settings were changed elsewhere, Restore will not overwrite the conflicting change. If an operation is interrupted or needs recovery, keep the app data and the library entry and use Restore. Only one instance can access the app data at a time.
 
-Do not move or redirect the executable's folders or links while applying or restoring an exclusion. Reservations coordinate this application, but Windows or other programs can change Defender independently.
+The [legacy scripts](./legacy-scripts/) are separate from the desktop app and have different behavior and risks.
 
-Global actions update `AutoGameModeEnabled` and `GameDVR_Enabled` for the current Windows user; their effectiveness depends on Windows and policy settings. The previous registry values and types are journaled before each write. If interrupted, use Restore in the global settings page; external changes are not overwritten.
+## Implementation and recovery details
 
-The legacy scripts, their documentation and tests are in [legacy-scripts](./legacy-scripts/).
+The app is built with Tauri 2, React and TypeScript. Library, profiles and transaction journals are stored under the application's `%LOCALAPPDATA%` directory; logs use Tauri's Windows log directory. Replacing the portable executable on the same Windows account does not remove those files.
+
+Defaults permanently removes enabled CPU/GPU settings, including those in an active optimization, and discards the corresponding backup. Interrupted operations retain recovery information. Older defaults transactions remain restorable or can be explicitly cleared with Defaults.
+
+Defender restoration preserves preexisting exclusions and verifies changes with elevation. Active profiles with overlapping folders or physically identical executables are rejected, including across users. Older journals without resource identities require manual inspection. Do not move or redirect the executable's folders or links while applying or restoring an exclusion. Machine-wide reservations are stored in `%PROGRAMDATA%\GameOptimizer\resources` and new Defender reservations in `%PROGRAMDATA%\GameOptimizer-Defender-2739818f`; do not delete them while changes are active. Restore older Defender transactions before creating new exclusions. These reservations coordinate this app, but Windows or other programs may change Defender independently.
+
+Global actions update `AutoGameModeEnabled` and `GameDVR_Enabled` for the current Windows user; their effectiveness depends on Windows and policy settings. The previous registry values and types are journaled before each write. After interruption, use Restore in global settings; external changes are not overwritten.
 
 ## License
 

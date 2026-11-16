@@ -1,112 +1,30 @@
-# 🎮 Game and Launcher Optimizer
+# Legacy scripts
 
-A powerful Windows batch script that applies specific optimizations to games, launchers, and auxiliary processes to maximize performance and minimize resource consumption.
+[Español](./README-ES.md) | English | [Desktop app](../README.md)
 
-## 📋 Overview
+These older Windows scripts are separate from the desktop app. They change Windows settings for games, launchers and other processes; they do **not** change a game's visual settings. Their results depend on the system, and improvements to FPS, latency or compatibility are not guaranteed. Some messages printed by the scripts make stronger claims and should not be treated as guarantees.
 
-This optimizer provides three distinct profiles tailored for different types of applications:
-- **Launcher Profile**: Balanced optimization for gaming platforms (Steam, Epic, Origin, etc.)
-- **Game Profile**: Maximum performance optimization for games
-- **Secondary Process Profile**: Stable configuration for anticheats and auxiliary processes
+> **Warning:** The scripts change system settings and may reduce antivirus protection. Their revert options do not generally restore every previous value, and can remove Defender exclusions that existed before using the scripts. Review and back up your settings before running them.
 
-## ✨ Features
+## What they do
 
-### 🚀 Launcher Profile
-- **GPU Configuration**: Balanced power settings for energy efficiency
-- **GameBar**: Enabled for overlays and screen capture
-- **Power Plan**: Balanced mode for optimal energy consumption
-- **Impact**: Improved fluidity without extra resource usage
+- Both scripts offer launcher, game and secondary-process options. They request a Windows GPU preference and change Game Mode and the power plan. The game option also disables Game DVR recording and adds Defender exclusions for the executable and its entire folder.
+- The Spanish script also changes CPU priority for future launcher or game processes with the same executable name, including in other folders. The English script does not change CPU priority.
+- The power plan affects the entire computer. Windows or the app may ignore the requested GPU preference. Defender exclusions reduce protection for the affected folder and process.
+- Revert removes the GPU preference and applies preset values to other settings; it does not restore all previous settings. The Spanish script separately backs up CPU priority and attempts to restore it; without a backup it leaves the current CPU value unchanged.
 
-### 🎯 Game Profile
-- **GPU Configuration**: High performance mode (always uses dedicated GPU)
-- **Windows Defender**: Excludes game folder and executable from real-time scanning
-- **GameDVR**: Disabled to eliminate recording lag
-- **GameBar**: Enabled for automatic Game Mode activation
-- **Power Plan**: High performance (CPU and GPU at maximum capacity)
-- **Impact**: Maximum FPS, reduced latency, uninterrupted gaming experience
+## Usage
 
-### 🛡️ Secondary Process Profile
-- **GPU Configuration**: Balanced settings (doesn't interfere with main game)
-- **GameBar**: Disabled to avoid conflicts with anticheats
-- **Power Plan**: Balanced mode (doesn't compete for system resources)
-- **Impact**: Maximum stability, prevents false positives with anticheat systems
+1. On Windows, run `game-optimizer-en.bat` or `game-optimizer-es.bat`. Keep `cpu-priority.ps1` next to the Spanish script.
+2. Select an option from 1–3 to configure or 4–6 to revert, then enter the full path to the executable.
+3. Game configuration and reversion request administrator approval. The Spanish script also requires administrator permissions to configure or revert launcher and game CPU priority. Review any prompts and verify the resulting settings.
 
-## 🔄 Revert Options
+The scripts use PowerShell and write logs under `legacy-scripts\logs`. Their messages and revert options are not equivalent to the desktop app's transaction-based restoration.
 
-All configurations can be completely reverted to restore Windows default settings:
-- **Revert Launcher**: Removes all launcher-specific optimizations
-- **Revert Game**: Removes all game optimizations and restores default security settings
-- **Revert Secondary Process**: Restores default configuration for auxiliary processes
+## Implementation
 
-## 🛠️ Usage
+GPU preferences are written under `HKCU\Software\Microsoft\DirectX\UserGpuPreferences` and `HKCU\System\GameConfigStore\Children`. The scripts also modify `AutoGameModeEnabled`, `GameDVR_Enabled`, power plans and Defender exclusions. The Spanish CPU helper uses Image File Execution Options and stores its backup in the machine registry. Administrator access is required for CPU changes and Defender exclusions. See `cpu-priority.ps1` and `tests\cpu-priority.tests.ps1` for the CPU implementation and tests.
 
-1. **Run the appropriate script**:
-   - `game-optimizer-en.bat` (English version)
-   - `game-optimizer-es.bat` (Spanish version)
+## License
 
-2. **Select your desired profile** (1-6):
-   - Options 1-3: Configure optimizations
-   - Options 4-6: Revert configurations
-
-3. **Provide the full path** to the executable you want to optimize
-
-4. **Administrator permissions** may be required for Game Profile optimizations
-
-## ⚠️ Important Notes
-
-- **All changes are PERMANENT** until manually reverted using the revert options
-- **Game Profile requires Administrator privileges** for Windows Defender exclusions and system-level optimizations
-- **Always backup your system** before applying optimizations
-- **Test configurations** with your specific games and hardware setup
-
-## 🖥️ System Requirements
-
-- **Operating System**: Windows 10 (tested)
-- **PowerShell**: Required for advanced configurations
-- **Administrator Rights**: Required for Game Profile optimizations
-
-## ⚡ Performance Benefits
-
-### Launcher Profile
-- Reduced launcher startup time
-- Lower background resource usage
-- Maintained system responsiveness
-
-### Game Profile
-- **FPS Increase**: 5-15% improvement in most games
-- **Reduced Input Lag**: Lower latency for competitive gaming
-- **Elimination of Interruptions**: No Windows Defender scans during gameplay
-- **Optimized Power Delivery**: CPU and GPU run at peak performance
-
-### Secondary Process Profile
-- **Anticheat Compatibility**: Prevents conflicts with game protection systems
-- **System Stability**: Maintains balanced resource allocation
-- **No False Positives**: Reduces anticheat detection issues
-
-## 🔧 Technical Details
-
-The optimizer modifies the following Windows components:
-- **GPU Preferences**: DirectX UserGpuPreferences registry entries
-- **Game Config Store**: Windows Game Mode settings
-- **Windows Defender**: Real-time protection exclusions
-- **Power Management**: System power plan configurations
-- **GameDVR**: Windows game recording features
-
-## 📝 Version Information
-
-- **Version**: 1.0.0
-- **Author**: Ele
-- **GitHub**: https://github.com/eleazarcelis
-- **Tested On**: Windows 10
-
-## ⚠️ Disclaimer
-
-This tool has been **tested exclusively on Windows 10**. Compatibility with other Windows versions is not guaranteed. Use at your own risk and always create system restore points before applying optimizations.
-
-## 🤝 Contributing
-
-Feel free to report issues, suggest improvements, or contribute to the project through the GitHub repository.
-
-## 📄 License
-
-This project is open source. Please check the repository for license details.
+See the repository's [license](../LICENSE).

@@ -90,6 +90,14 @@ pub fn open_update_download(tag: &str) -> Result<(), AppError> {
     open(Path::new(&url), None, "UPDATE_DOWNLOAD")
 }
 
+pub fn open_issue_report() -> Result<(), AppError> {
+    open(
+        Path::new("https://github.com/eleazarcelis/game-optimizer/issues/new"),
+        None,
+        "ISSUE_OPEN",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

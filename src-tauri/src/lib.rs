@@ -208,6 +208,14 @@ async fn open_update_download(tag: String) -> Result<(), AppError> {
 }
 
 #[tauri::command]
+async fn open_issue_report() -> Result<(), AppError> {
+    log::info!("Opening GitHub issue page");
+    tauri::async_runtime::spawn_blocking(launcher::open_issue_report)
+        .await
+        .map_err(|e| error("ISSUE_TASK", e))?
+}
+
+#[tauri::command]
 async fn gpu_status(
     app: tauri::AppHandle,
     path: String,
@@ -335,6 +343,7 @@ pub fn run() {
             launch_executable,
             open_executable_folder,
             open_update_download,
+            open_issue_report,
             gpu_status,
             apply_profile,
             reset_profile,

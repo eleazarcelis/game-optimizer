@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
-import { Gamepad2 } from "lucide-react";
+import { ExternalLink, Gamepad2 } from "lucide-react";
 import type { AppState, Language, LaunchBehavior } from "../model";
 import { translate as t } from "../i18n";
 import { Profiles } from "./Profiles";
@@ -60,6 +60,10 @@ export function Settings({ state, update, showError, initialTab = "general", upd
           {updateStatus.kind === "current" && t(lang, "updateCurrent")}
           {updateStatus.kind === "failed" && t(lang, "updateCheckFailed")}
           {updateStatus.kind === "available" && <><strong>{t(lang, "updateAvailable")} {updateStatus.tag}</strong><p>{t(lang, updateStatus.downloadable ? "updateDownloadDesc" : "updateAssetMissing")}</p></>}
+        </div>
+        <div className="about-feedback">
+          <button className="secondary" onClick={() => { void invoke("open_issue_report").catch((error: unknown) => showError(`${t(lang, "issueOpenFailed")} ${String(error && typeof error === "object" && "message" in error ? error.message : error)}`)); }}><ExternalLink size={16} aria-hidden="true"/>{t(lang, "reportIssue")}</button>
+          <p>{t(lang, "reportIssueDesc")}</p>
         </div>
         <div className="about-license">
           <strong>{t(lang, "license")}</strong>
