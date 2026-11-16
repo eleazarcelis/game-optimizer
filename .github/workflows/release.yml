@@ -62,6 +62,15 @@ jobs:
         shell: pwsh
         run: npm run tauri build -- --no-bundle -- --locked
 
+      - name: Verify executable version
+        shell: pwsh
+        run: |
+          $expected = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $actual = (Get-Item 'src-tauri\target\release\game-optimizer-app.exe').VersionInfo.ProductVersion
+          if ($actual -cne $expected) {
+            throw "Executable version $actual does not match package.json version $expected."
+          }
+
       - name: Attach executable and license to release
         if: github.event_name == 'release'
         shell: pwsh
