@@ -17,4 +17,15 @@ describe("About update controls", () => {
     expect(render({ kind: "available", tag: "v2.2.0", downloadable: true })).toContain("Descargar actualización");
     expect(render({ kind: "checking" })).toContain("Buscando…");
   });
+  it("includes the GPL license and source information in About", () => {
+    const state = initialState();
+    state.language = "es";
+    const html = renderToStaticMarkup(
+      <Settings state={state} update={() => {}} showError={() => {}} initialTab="about" updateStatus={{ kind: "idle" }} checkUpdates={() => {}} />,
+    );
+    expect(html).toContain("GPL-3.0-or-later");
+    expect(html).toContain("Ver texto de la licencia (inglés)");
+    expect(html).toContain("GNU GENERAL PUBLIC LICENSE");
+    expect(html).toContain("github.com/eleazarcelis/game-optimizer");
+  });
 });

@@ -29,6 +29,10 @@ Las acciones globales modifican `AutoGameModeEnabled` y `GameDVR_Enabled` del us
 
 Los scripts anteriores, su documentación y sus pruebas están en [legacy-scripts](./legacy-scripts/).
 
+## Licencia
+
+Game Optimizer se distribuye bajo la Licencia Pública General de GNU, versión 3 o, a tu elección, cualquier versión posterior (GPL-3.0-or-later). Consulta [LICENSE](./LICENSE). Las dependencias de terceros conservan sus propias licencias.
+
 ## Desarrollo
 
 Requisitos: Windows, Node.js, Rust con toolchain MSVC, herramientas de compilación de Visual C++ y WebView2 Runtime.
@@ -59,7 +63,7 @@ El ejecutable se genera en `src-tauri\target\release`. WebView2 Runtime debe est
 
 ## Publicar una release
 
-Cuando el workflow esté en la rama predeterminada, actualiza la versión en `package.json` y `package-lock.json` y publica una release de GitHub con una etiqueta coincidente como `v1.2.3` o `v1.2.3-rc.1` (no se admiten metadatos de compilación como `+build`). El workflow descarga esa etiqueta, verifica que coincida con `package.json`, compila un ejecutable portable para Windows x64 y adjunta `Game-Optimizer-<etiqueta>-windows-x64.exe` a la release. Tauri lee de `package.json` la versión mostrada en la app y los metadatos de versión del ejecutable; cada componente numérico debe ser como máximo 65535. Las releases en borrador se compilan al publicarlas. Si ya existe un archivo con ese nombre, elimínalo antes de volver a ejecutar el workflow.
+Cuando el workflow esté en la rama predeterminada, actualiza la versión en `package.json` y `package-lock.json` y publica una release de GitHub con una etiqueta coincidente como `v1.2.3` o `v1.2.3-rc.1` (no se admiten metadatos de compilación como `+build`). El workflow descarga esa etiqueta, verifica que coincida con `package.json`, compila un ejecutable portable para Windows x64 y adjunta `Game-Optimizer-<etiqueta>-windows-x64.exe` y `LICENSE` a la release. Tauri lee de `package.json` la versión mostrada en la app y los metadatos de versión del ejecutable; cada componente numérico debe ser como máximo 65535. Las releases en borrador se compilan al publicarlas. Si alguno de esos archivos ya existe, elimínalo antes de volver a ejecutar el workflow.
 
 Los pushes a `main` ejecutan la misma compilación y preparan la caché de dependencias de Rust para releases posteriores; no adjuntan archivos a ninguna release. La primera compilación o una compilación sin caché puede tardar más.
 

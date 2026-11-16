@@ -6,6 +6,7 @@ import type { AppState, Language, LaunchBehavior } from "../model";
 import { translate as t } from "../i18n";
 import { Profiles } from "./Profiles";
 import type { UpdateStatus } from "../updates";
+import licenseText from "../../LICENSE?raw";
 
 type Props = { state: AppState; update: (state: AppState) => void; showError: (message: string) => void; initialTab?: SettingsTab; updateStatus: UpdateStatus; checkUpdates: () => void };
 type SettingsTab = "general" | "profiles" | "about";
@@ -59,6 +60,12 @@ export function Settings({ state, update, showError, initialTab = "general", upd
           {updateStatus.kind === "current" && t(lang, "updateCurrent")}
           {updateStatus.kind === "failed" && t(lang, "updateCheckFailed")}
           {updateStatus.kind === "available" && <><strong>{t(lang, "updateAvailable")} {updateStatus.tag}</strong><p>{t(lang, updateStatus.downloadable ? "updateDownloadDesc" : "updateAssetMissing")}</p></>}
+        </div>
+        <div className="about-license">
+          <strong>{t(lang, "license")}</strong>
+          <p>GNU General Public License v3.0 {t(lang, "licenseOrLater")} (GPL-3.0-or-later)</p>
+          <p>{t(lang, "sourceCode")}: github.com/eleazarcelis/game-optimizer</p>
+          <details><summary>{t(lang, "viewLicense")}</summary><pre className="license-text scroll-panel" tabIndex={0}>{licenseText}</pre></details>
         </div>
       </div>
     </div>

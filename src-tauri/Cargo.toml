@@ -2,6 +2,7 @@
 name = "game-optimizer-app"
 version = "0.1.0"
 description = "Game Optimizer desktop application"
+license = "GPL-3.0-or-later"
 authors = ["Ele"]
 edition = "2024"
 

@@ -62,7 +62,7 @@ jobs:
         shell: pwsh
         run: npm run tauri build -- --no-bundle -- --locked
 
-      - name: Attach executable to release
+      - name: Attach executable and license to release
         if: github.event_name == 'release'
         shell: pwsh
         env:
@@ -71,5 +71,5 @@ jobs:
         run: |
           $asset = "Game-Optimizer-$env:RELEASE_TAG-windows-x64.exe"
           Copy-Item 'src-tauri\target\release\game-optimizer-app.exe' $asset
-          gh release upload $env:RELEASE_TAG $asset
+          gh release upload $env:RELEASE_TAG $asset LICENSE
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -29,6 +29,10 @@ Global actions update `AutoGameModeEnabled` and `GameDVR_Enabled` for the curren
 
 The legacy scripts, their documentation and tests are in [legacy-scripts](./legacy-scripts/).
 
+## License
+
+Game Optimizer is licensed under the GNU General Public License, version 3 or (at your option) any later version (GPL-3.0-or-later). See [LICENSE](./LICENSE). Third-party dependencies retain their own licenses.
+
 ## Development
 
 Requirements: Windows, Node.js, Rust with the MSVC toolchain, Visual C++ build tools and WebView2 Runtime.
@@ -59,7 +63,7 @@ The executable is produced under `src-tauri\target\release`. WebView2 Runtime mu
 
 ## Publishing a release
 
-Once the workflow is on the default branch, update the version in `package.json` and `package-lock.json`, then publish a GitHub release for a matching tag such as `v1.2.3` or `v1.2.3-rc.1` (build metadata such as `+build` is not supported). The workflow checks out that tag, verifies it matches `package.json`, builds a Windows x64 portable executable and attaches `Game-Optimizer-<tag>-windows-x64.exe` to the release. Tauri reads the displayed app version and Windows executable version metadata from `package.json`; each numeric version component must be at most 65535. Draft releases build when published. If an asset with that name already exists, remove it before rerunning the workflow.
+Once the workflow is on the default branch, update the version in `package.json` and `package-lock.json`, then publish a GitHub release for a matching tag such as `v1.2.3` or `v1.2.3-rc.1` (build metadata such as `+build` is not supported). The workflow checks out that tag, verifies it matches `package.json`, builds a Windows x64 portable executable and attaches `Game-Optimizer-<tag>-windows-x64.exe` and `LICENSE` to the release. Tauri reads the displayed app version and Windows executable version metadata from `package.json`; each numeric version component must be at most 65535. Draft releases build when published. If either asset already exists, remove it before rerunning the workflow.
 
 Pushes to `main` run the same build and populate the Rust dependency cache for later releases; they do not upload release assets. The first build, or a build after a cache miss, may still take longer.
 
