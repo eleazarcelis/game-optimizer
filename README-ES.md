@@ -2,7 +2,7 @@
 
 Aplicación de escritorio para Windows construida con Tauri 2, React y TypeScript.
 
-> **Trabajo en curso:** se pueden aplicar y restaurar la prioridad de CPU, la preferencia de GPU y los ajustes globales; valores predefinidos elimina los ajustes seleccionados de forma permanente. Las nuevas exclusiones de Defender siguen deshabilitadas mientras se valida la gestión de conflictos entre rutas y usuarios. Todavía no reemplaza completamente los scripts anteriores.
+> **Trabajo en curso:** se pueden aplicar y restaurar la prioridad de CPU, la preferencia de GPU, las exclusiones opcionales de Defender y los ajustes globales; valores predefinidos elimina los ajustes de CPU y GPU seleccionados de forma permanente. Todavía no reemplaza completamente los scripts anteriores.
 
 ## Funcionalidades actuales
 
@@ -14,10 +14,12 @@ Aplicación de escritorio para Windows construida con Tauri 2, React y TypeScrip
 - Aplicar y restaurar prioridad de CPU y preferencias de GPU con confirmación y diario persistente. La prioridad de CPU requiere permiso de administrador y afecta a procesos futuros con el mismo nombre de ejecutable, también en otras carpetas.
 - Valores predefinidos elimina permanentemente los ajustes habilitados de CPU y GPU y las acciones de CPU/GPU de una optimización activa. Descarta el respaldo de esa optimización y, una vez completado, Restaurar no puede deshacerlo. Si se interrumpe, se conserva información para su recuperación. Las transacciones antiguas de valores predefinidos siguen pudiéndose restaurar o limpiar explícitamente.
 - Las opciones globales de energía, Modo Juego y Game DVR están separadas de los perfiles y, por defecto, no realizan cambios. El plan de energía afecta a todo el equipo y el plan seleccionado debe existir.
-- Las nuevas acciones de Defender están deshabilitadas. Si un perfil existente incluye Defender, la confirmación indica que se omitirá y solo se aplicarán CPU/GPU; el perfil no se modifica. Los diarios de Defender creados sin identidad del recurso no pueden restaurarse automáticamente y requieren inspección manual; los nuevos requieren verificación elevada y rechazan cambios si el recurso fue reemplazado o no es accesible.
+- Las exclusiones de Defender son opcionales y están desactivadas por defecto. Al optimizar se excluyen la carpeta completa del ejecutable y los archivos abiertos por ese proceso, lo que reduce la protección antivirus; requiere aprobaciones de administrador. Se rechazan perfiles activos con carpetas superpuestas o ejecutables que comparten identidad física, incluso entre usuarios. Restaurar conserva las exclusiones preexistentes y verifica los cambios con elevación. El estado se muestra como no verificado hasta restaurar. Valores predefinidos no modifica Defender: restaura primero una optimización que lo incluya. Los diarios antiguos sin identidad del recurso requieren inspección manual.
 - La biblioteca y los perfiles se guardan en la carpeta de la aplicación dentro de `%LOCALAPPDATA%`. Los logs utilizan el directorio de registros de Tauri para Windows.
 
-El estado del perfil refleja los cambios gestionados por la aplicación, no una evaluación de toda la configuración de Windows. Si un ajuste cambia externamente, la restauración se niega a sobrescribirlo; resuelve el conflicto antes de reintentar. No elimines los datos de la aplicación ni una entrada con cambios pendientes de recuperación. Solo una instancia puede acceder a los datos a la vez. Las reservas de recursos del equipo se guardan en `%PROGRAMDATA%\GameOptimizer\resources`; no las elimines mientras haya cambios activos.
+El estado del perfil refleja los cambios gestionados por la aplicación, no una evaluación de toda la configuración de Windows. Si se detecta que un ajuste cambió externamente, la restauración se niega a sobrescribirlo; resuelve el conflicto antes de reintentar. No elimines los datos de la aplicación ni una entrada con cambios pendientes de recuperación. Solo una instancia puede acceder a los datos a la vez. Las reservas del equipo se guardan en `%PROGRAMDATA%\GameOptimizer\resources` y las nuevas reservas de Defender en `%PROGRAMDATA%\GameOptimizer-Defender-2739818f`; no las elimines mientras haya cambios activos. Restaura las transacciones antiguas de Defender antes de crear nuevas exclusiones.
+
+No muevas ni redirijas las carpetas o enlaces del ejecutable mientras se aplica o restaura una exclusión. Las reservas coordinan esta aplicación, pero Windows u otros programas pueden modificar Defender por separado.
 
 Las acciones globales modifican `AutoGameModeEnabled` y `GameDVR_Enabled` del usuario actual de Windows; su efectividad depende de Windows y de las directivas existentes. El diario guarda los valores y tipos anteriores antes de escribir. Tras una interrupción, usa Restaurar en ajustes globales; los cambios externos no se sobrescriben.
 
@@ -77,6 +79,33 @@ Si se interrumpe o falla la restauración, conserva el mismo `GAME_OPTIMIZER_TES
 cargo test --manifest-path src-tauri\Cargo.toml recover_dummy_gpu_journal -- --ignored --nocapture
 ```
 
+## Prueba real de Defender
+
+Esta prueba opcional requiere varias aprobaciones de UAC. Agrega temporalmente exclusiones para una carpeta nueva y un ejecutable descartable dentro de ella; después intenta restaurarlas y verifica el resultado. La exclusión de carpeta afecta a todos sus archivos mientras está activa, así que no guardes otros archivos allí. El diario se guarda en una carpeta separada.
+
+```powershell
+$id = [guid]::NewGuid().ToString('N')
+$dir = Join-Path $env:TEMP "GameOptimizerDefenderTest-$id"
+$dummyDir = Join-Path $dir 'dummy'
+New-Item -ItemType Directory -Path $dummyDir | Out-Null
+$env:GAME_OPTIMIZER_DUMMY_EXE = Join-Path $dummyDir "dummy-$id.exe"
+$env:GAME_OPTIMIZER_SERVICE_ROOT = Join-Path $dir 'journal'
+rustc --edition 2021 tests\fixtures\dummy.rs -o $env:GAME_OPTIMIZER_DUMMY_EXE
+if ($LASTEXITCODE -ne 0) { throw 'No se pudo compilar el ejecutable de prueba' }
+cargo build --manifest-path src-tauri\Cargo.toml
+if ($LASTEXITCODE -ne 0) { throw 'No se pudo compilar el asistente de administrador' }
+$env:GAME_OPTIMIZER_HELPER_EXE = (Resolve-Path src-tauri\target\debug\game-optimizer-app.exe).Path
+cargo test --manifest-path src-tauri\Cargo.toml real_dummy_coordinated_defender_profile_applies_and_restores -- --ignored --nocapture
+```
+
+Si la prueba se interrumpe o falla la restauración, conserva el directorio y el diario. Con los mismos valores de `GAME_OPTIMIZER_DUMMY_EXE`, `GAME_OPTIMIZER_SERVICE_ROOT` y `GAME_OPTIMIZER_HELPER_EXE`, intenta recuperar el diario:
+
+```powershell
+cargo test --manifest-path src-tauri\Cargo.toml recover_full_profile -- --ignored --nocapture
+```
+
+No elimines el directorio ni el diario hasta comprobar que las exclusiones se restauraron.
+
 ## Pendiente
 
-Las instantáneas de Defender registran el volumen y el identificador de archivo de Windows; las reservas basadas en esa identidad reconocen enlaces duros al mismo archivo. Las acciones de Defender en perfiles siguen deshabilitadas: aún no se gestionan las carpetas superpuestas ni la coordinación segura entre usuarios. La restauración de CPU recupera el valor de prioridad, pero puede dejar claves IFEO vacías creadas al aplicar el ajuste. También faltan pruebas exhaustivas de interfaz e interrupciones.
+Las instantáneas de Defender registran el volumen y el identificador de archivo de Windows. La restauración de CPU recupera el valor de prioridad, pero puede dejar claves IFEO vacías creadas al aplicar el ajuste. También faltan pruebas exhaustivas de interfaz e interrupciones.

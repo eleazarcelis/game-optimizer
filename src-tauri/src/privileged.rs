@@ -1,5 +1,6 @@
 use crate::{
     defender,
+    defender_coordination::{self, Coordinator, Reservation},
     gpu::{RawValue, raw, reg_type},
     machine_resource,
     resource_identity::{Identity, Target},
@@ -41,6 +42,17 @@ pub enum Job {
         identity: Identity,
         expected: bool,
         desired: bool,
+    },
+    #[serde(rename = "defender-coordinated")]
+    DefenderCoordinated {
+        resource: String,
+        path: String,
+        target: String,
+        owner: Uuid,
+        identity: Identity,
+        expected: bool,
+        desired: bool,
+        restore: bool,
     },
     #[serde(rename = "defender-query")]
     DefenderQuery { resource: String, target: String },
@@ -131,6 +143,43 @@ fn write_cpu(name: &str, value: &Option<RawValue>) -> Result<(), String> {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum DefenderTransition {
+    Unchanged,
+    Write,
+    Release,
+    WriteAndRelease,
+}
+
+fn defender_transition(
+    restore: bool,
+    folder: bool,
+    owned: bool,
+    current: bool,
+    expected: bool,
+    desired: bool,
+) -> Result<DefenderTransition, String> {
+    if restore && current == desired {
+        return Ok(if folder && owned {
+            DefenderTransition::Release
+        } else {
+            DefenderTransition::Unchanged
+        });
+    }
+    if !owned {
+        return Err("Defender reservation is missing".into());
+    }
+    if current != expected {
+        return Err("Defender exclusion changed externally".into());
+    }
+    Ok(match (current != desired, restore && folder) {
+        (false, false) => DefenderTransition::Unchanged,
+        (true, false) => DefenderTransition::Write,
+        (false, true) => DefenderTransition::Release,
+        (true, true) => DefenderTransition::WriteAndRelease,
+    })
+}
+
 fn execute(job: Job) -> Result<i32, String> {
     log::info!("Executing restricted administrative action");
     match job {
@@ -187,6 +236,59 @@ fn execute(job: Job) -> Result<i32, String> {
             }
             Ok(0)
         }
+        Job::DefenderCoordinated {
+            resource,
+            path,
+            target,
+            owner,
+            identity,
+            expected,
+            desired,
+            restore,
+        } => {
+            defender::validate_action_target(&resource, &path, &target)?;
+            if !restore && !desired {
+                return Err("Invalid Defender apply operation".into());
+            }
+            let held_target = Target::open(&target, resource == "defender-path")?;
+            if held_target.identity() != &identity {
+                return Err("Defender resource identity changed".into());
+            }
+            let (reservation, _held) = Reservation::open(&path, owner)?;
+            let coordinator = Coordinator::open()?;
+            if !restore && resource == "defender-path" {
+                defender_coordination::ensure_no_legacy_reservations()?;
+                coordinator.claim(&reservation)?;
+            }
+            let owned = coordinator.owned(&reservation)?;
+            let current = defender::read(&resource, &target)?;
+            let transition = defender_transition(
+                restore,
+                resource == "defender-path",
+                owned,
+                current,
+                expected,
+                desired,
+            )?;
+            held_target.ensure_path(&target, resource == "defender-path")?;
+            if matches!(
+                transition,
+                DefenderTransition::Write | DefenderTransition::WriteAndRelease
+            ) {
+                defender::write(&resource, &target, desired)?;
+            }
+            held_target.ensure_path(&target, resource == "defender-path")?;
+            if defender::read(&resource, &target)? != desired {
+                return Err("Defender exclusion verification failed".into());
+            }
+            if matches!(
+                transition,
+                DefenderTransition::Release | DefenderTransition::WriteAndRelease
+            ) {
+                coordinator.release(&reservation)?;
+            }
+            Ok(0)
+        }
         Job::DefenderQuery { resource, target } => {
             defender::validate_target(&resource, &target)?;
             Ok(if defender::read(&resource, &target)? {
@@ -210,19 +312,35 @@ pub fn helper(encoded: &str) -> i32 {
         Ok(code) => code,
         Err(e) => {
             eprintln!("ADMIN_ACTION_FAILED: {e}");
-            1
+            match e.as_str() {
+                "Defender exclusion overlaps another active profile" => 12,
+                "Defender reservation directory has unsafe permissions or ownership" => 13,
+                "Defender resource identity changed" | "Defender reservation identity changed" => {
+                    14
+                }
+                "Defender reservation is missing" => 15,
+                "Defender exclusion changed externally" => 16,
+                "Restore previous Defender transactions before applying a new exclusion" => 17,
+                _ => 1,
+            }
         }
     }
 }
 
 pub fn launch(job: &Job) -> Result<(), String> {
     let code = launch_code(job)?;
-    if code != 0 {
-        return Err(format!(
+    match code {
+        0 => Ok(()),
+        12 => Err("Defender exclusion overlaps another active profile".into()),
+        13 => Err("Defender reservation directory has unsafe permissions or ownership".into()),
+        14 => Err("Defender resource or reservation identity changed".into()),
+        15 => Err("Defender reservation is missing".into()),
+        16 => Err("Defender exclusion changed externally".into()),
+        17 => Err("Restore previous Defender transactions before applying a new exclusion".into()),
+        _ => Err(format!(
             "Administrator helper failed (exit code {code}); check permissions and external changes"
-        ));
+        )),
     }
-    Ok(())
 }
 
 pub fn query_defender(resource: &str, target: &str) -> Result<bool, String> {
@@ -328,6 +446,37 @@ mod tests {
         assert!(validate_name(r"game.exe\PerfOptions").is_err());
         assert!(validate_name("game.exe:bad").is_err());
         assert!(validate_name("game.exe\0").is_err());
+    }
+
+    #[test]
+    fn coordinated_restore_requires_ownership_for_changes_and_releases_last() {
+        use DefenderTransition::*;
+        assert_eq!(
+            defender_transition(false, true, true, false, false, true).unwrap(),
+            Write
+        );
+        assert_eq!(
+            defender_transition(false, false, true, true, true, true).unwrap(),
+            Unchanged
+        );
+        assert_eq!(
+            defender_transition(true, false, true, true, true, false).unwrap(),
+            Write
+        );
+        assert_eq!(
+            defender_transition(true, true, true, true, true, false).unwrap(),
+            WriteAndRelease
+        );
+        assert_eq!(
+            defender_transition(true, true, true, false, true, false).unwrap(),
+            Release
+        );
+        assert_eq!(
+            defender_transition(true, true, false, false, true, false).unwrap(),
+            Unchanged
+        );
+        assert!(defender_transition(true, true, false, true, true, false).is_err());
+        assert!(defender_transition(false, true, true, true, false, true).is_err());
     }
 
     #[test]

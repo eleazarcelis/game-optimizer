@@ -25,6 +25,8 @@ struct Action {
     target: String,
     owner: Uuid,
     enabled: bool,
+    #[serde(default)]
+    coordinated: bool,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -55,8 +57,13 @@ pub fn validate_target(kind: &str, target: &str) -> Result<(), String> {
 
 fn action(step: &Step) -> Result<Action, String> {
     let action: Action = serde_json::from_value(step.action.clone()).map_err(|e| e.to_string())?;
-    validate_target(&action.kind, &action.target)?;
-    let path = Path::new(&action.path);
+    validate_action_target(&action.kind, &action.path, &action.target)?;
+    Ok(action)
+}
+
+pub fn validate_action_target(kind: &str, executable: &str, target: &str) -> Result<(), String> {
+    validate_target(kind, target)?;
+    let path = Path::new(executable);
     if !path.is_absolute()
         || !path
             .extension()
@@ -64,23 +71,20 @@ fn action(step: &Step) -> Result<Action, String> {
     {
         return Err("Invalid executable path".into());
     }
-    let expected = if action.kind == "defender-process" {
+    let expected = if kind == "defender-process" {
         path
     } else {
         path.parent().ok_or("Missing executable folder")?
     };
-    if !expected
-        .to_string_lossy()
-        .eq_ignore_ascii_case(&action.target)
-    {
+    if !expected.to_string_lossy().eq_ignore_ascii_case(target) {
         return Err("Defender target does not match executable".into());
     }
-    Ok(action)
+    Ok(())
 }
 
 pub fn validate(step: &Step, path: &str) -> Result<(), String> {
     let action = action(step)?;
-    if !action.path.eq_ignore_ascii_case(path) {
+    if step.id != action.kind || !action.path.eq_ignore_ascii_case(path) {
         return Err("Defender journal path mismatch".into());
     }
     Ok(())
@@ -232,12 +236,58 @@ impl DefenderExecutor {
 }
 impl StepExecutor for DefenderExecutor {
     fn snapshot(&mut self, step: &Step) -> Result<Value, String> {
+        let action = action(step)?;
+        if action.coordinated {
+            let target = Target::open(&action.target, action.kind == "defender-path")?;
+            let excluded = privileged::query_defender(&action.kind, &action.target)?;
+            target.ensure_path(&action.target, action.kind == "defender-path")?;
+            return serde_json::to_value(Snapshot {
+                excluded,
+                identity: Some(target.identity().clone()),
+            })
+            .map_err(|e| e.to_string());
+        }
         Self::executor(step)?.snapshot(step)
     }
     fn apply(&mut self, step: &Step) -> Result<(), String> {
+        let action = action(step)?;
+        if action.coordinated {
+            let before: Snapshot =
+                serde_json::from_value(step.before.clone().ok_or("Missing Defender snapshot")?)
+                    .map_err(|e| e.to_string())?;
+            return privileged::launch(&Job::DefenderCoordinated {
+                resource: action.kind,
+                path: action.path,
+                target: action.target,
+                owner: action.owner,
+                identity: before
+                    .identity
+                    .ok_or("Defender journal has no resource identity")?,
+                expected: before.excluded,
+                desired: action.enabled,
+                restore: false,
+            });
+        }
         Self::executor(step)?.apply(step)
     }
     fn restore(&mut self, step: &Step, before: &Value) -> Result<(), String> {
+        let action = action(step)?;
+        if action.coordinated {
+            let before: Snapshot =
+                serde_json::from_value(before.clone()).map_err(|e| e.to_string())?;
+            return privileged::launch(&Job::DefenderCoordinated {
+                resource: action.kind,
+                path: action.path,
+                target: action.target,
+                owner: action.owner,
+                identity: before
+                    .identity
+                    .ok_or("Defender journal has no resource identity")?,
+                expected: action.enabled,
+                desired: before.excluded,
+                restore: true,
+            });
+        }
         Self::executor(step)?.restore(step, before)
     }
 }
@@ -584,6 +634,17 @@ mod tests {
         tx.restore(&mut DefenderExecutor).unwrap();
         assert!(!privileged::query_defender("defender-path", folder).unwrap());
         assert!(!privileged::query_defender("defender-process", &exe).unwrap());
+    }
+
+    #[test]
+    #[ignore = "requires UAC to restore the disposable Defender test journal"]
+    fn recover_dummy_defender_journal() {
+        let root = PathBuf::from(
+            std::env::var("GAME_OPTIMIZER_DEFENDER_TEST_ROOT")
+                .expect("Set GAME_OPTIMIZER_DEFENDER_TEST_ROOT"),
+        );
+        let mut tx = Transaction::open(&root.join("defender-journal.json")).unwrap();
+        tx.restore(&mut DefenderExecutor).unwrap();
     }
 
     #[test]

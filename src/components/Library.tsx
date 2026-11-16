@@ -67,13 +67,13 @@ function Entry({ item, state, remove, launch, launchingPath, confirmAction, ensu
     return () => { active = false; };
   }, [item.path, showError, busy]);
   const plan = availableProfileActions(profile);
-  const resetPlan = profile && { actions: { cpu: profile.cpu, gpu: profile.gpu, defender: false }, defenderSkipped: profile.defender };
+  const resetPlan = profile && { actions: { cpu: profile.cpu, gpu: profile.gpu, defender: false } };
   async function perform(action: "apply" | "restore" | "reset") {
     let claimed = false;
     try {
       const selectedPlan = action === "reset" ? resetPlan : plan;
       const details = selectedPlan && (action === "apply" || action === "reset")
-        ? `\n\n${t(lang, "cpu")}: ${t(lang, selectedPlan.actions.cpu)}\n${t(lang, "gpu")}: ${t(lang, selectedPlan.actions.gpu === "balanced" ? "gpuSaving" : selectedPlan.actions.gpu)}\n${t(lang, "defender")}: ${selectedPlan.defenderSkipped ? t(lang, "defenderSkipped") : t(lang, "off")}`
+        ? `\n\n${t(lang, "cpu")}: ${t(lang, selectedPlan.actions.cpu)}\n${t(lang, "gpu")}: ${t(lang, selectedPlan.actions.gpu === "balanced" ? "gpuSaving" : selectedPlan.actions.gpu)}\n${t(lang, "defender")}: ${t(lang, action === "reset" ? "none" : selectedPlan.actions.defender ? "on" : "off")}${action === "apply" && selectedPlan.actions.defender ? `\n${t(lang, "defenderWarning")}` : ""}`
         : "";
       if (!await confirmAction(t(lang, action === "apply" ? "gpuConfirm" : action === "reset" ? "resetConfirm" : status?.state === "resetCommit" ? "finishResetConfirm" : "restoreConfirm") + details)) return;
       if (!claimOperation(item.path)) return;
@@ -105,7 +105,7 @@ function Entry({ item, state, remove, launch, launchingPath, confirmAction, ensu
   const statusLabel = statusFailed ? t(lang, statusErrorDismissed ? "notOptimized" : "statusError") : !status ? t(lang, "loading")
     : t(lang, status.state === "none" ? "gpuNone" : status.state === "applied" ? "gpuApplied" : status.state === "defaults" ? "defaultsApplied" : status.state === "conflict" ? "gpuConflict" : status.state === "unverified" ? "defenderStatusUnverified" : status.state === "resetCommit" ? "resetCommitStatus" : "gpuRecovery");
   const canReset = status && ["none", "applied", "defaults"].includes(status.state);
-  const hasResetActions = !!profile && (!!plan || status?.state === "applied" || status?.state === "defaults");
+  const hasResetActions = !!profile && (profile.cpu !== "none" || profile.gpu !== "none" || status?.state === "applied" || status?.state === "defaults");
   async function confirmRemove() {
     setMenuOpen(false);
     menuButton.current?.focus();
@@ -148,7 +148,7 @@ function Entry({ item, state, remove, launch, launchingPath, confirmAction, ensu
       {status && status.state !== "none"
         ? <button className="entry-restore" disabled={busy || launchingPath !== null} onClick={() => void perform("restore")}><RotateCcw size={14} aria-hidden="true"/>{t(lang, status.state === "resetCommit" ? "finishReset" : "revert")}</button>
         : <button className="entry-optimize" disabled={busy || launchingPath !== null || status?.state !== "none" || !plan} title={!plan ? t(lang, "profileUnsupported") : undefined} onClick={() => void perform("apply")}><Zap size={14} aria-hidden="true"/>{t(lang, "optimize")}</button>}
-      <button disabled={busy || launchingPath !== null || !canReset || !hasResetActions} title={!canReset ? t(lang, "resetBlocked") : !hasResetActions ? t(lang, "profileUnsupported") : undefined} onClick={() => void perform("reset")}>{t(lang, "reset")}</button>
+      <button disabled={busy || launchingPath !== null || !canReset || !hasResetActions} title={!canReset ? t(lang, "resetBlocked") : !hasResetActions ? t(lang, "resetUnsupported") : undefined} onClick={() => void perform("reset")}>{t(lang, "reset")}</button>
     </div>
   </article>;
 }

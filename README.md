@@ -2,7 +2,7 @@
 
 A Windows desktop application built with Tauri 2, React and TypeScript.
 
-> **Work in progress:** CPU priority, GPU preference and global settings can be applied and restored; defaults removes selected settings permanently. New Defender exclusions remain disabled while cross-path and cross-user conflict handling is validated. This is not yet a complete replacement for the legacy scripts.
+> **Work in progress:** CPU priority, GPU preference, optional Defender exclusions and global settings can be applied and restored; defaults removes selected CPU and GPU settings permanently. This is not yet a complete replacement for the legacy scripts.
 
 ## Current features
 
@@ -14,10 +14,12 @@ A Windows desktop application built with Tauri 2, React and TypeScript.
 - Apply and restore CPU priority and GPU preferences with confirmation and a persistent transaction journal. CPU priority requires administrator approval and affects future processes with the same executable name, including in other folders.
 - Defaults permanently removes the enabled CPU and GPU settings and any CPU/GPU actions in an active optimization. It discards that optimization's backup; once completed, Restore cannot undo it. Interrupted operations retain recovery information. Older defaults transactions remain restorable or can be explicitly cleared with Defaults.
 - Global power, Game Mode and Game DVR options are separate from executable profiles and default to no change. Power changes affect the whole computer and require the selected plan to exist.
-- Defender actions are disabled for new changes. When an existing profile includes Defender, the confirmation explains it will be skipped and only CPU/GPU actions will run; the profile is not changed. Defender journals created without a resource identity cannot be restored automatically and require manual inspection; newer journals require elevated verification and refuse to modify a replaced or inaccessible resource.
+- Defender exclusions are optional and disabled by default. Optimization excludes the executable's entire folder and files opened by that process, reducing antivirus protection; administrator approvals are required. Active profiles with overlapping folders or physically identical executables are rejected, including across users. Restore preserves preexisting exclusions and verifies changes with elevation. Status remains unverified until restoration. Defaults does not change Defender: restore an optimization that includes it first. Older journals without resource identities require manual inspection.
 - Library and profile data are stored under the application's `%LOCALAPPDATA%` directory. Application logs use Tauri's Windows log directory.
 
-The profile status reflects changes managed by this application, not an assessment of all existing Windows settings. If a setting changes externally, restoration refuses to overwrite it; resolve the conflict before retrying. Do not delete the application data or an active executable entry while its change requires recovery. Only one instance can access the application data at a time. Machine-wide resource reservations are stored under `%PROGRAMDATA%\GameOptimizer\resources`; do not delete them while changes are active.
+The profile status reflects changes managed by this application, not an assessment of all existing Windows settings. If an external setting change is detected, restoration refuses to overwrite it; resolve the conflict before retrying. Do not delete the application data or an active executable entry while its change requires recovery. Only one instance can access the application data at a time. Machine-wide reservations are stored in `%PROGRAMDATA%\GameOptimizer\resources` and new Defender reservations in `%PROGRAMDATA%\GameOptimizer-Defender-2739818f`; do not delete them while changes are active. Restore older Defender transactions before creating new exclusions.
+
+Do not move or redirect the executable's folders or links while applying or restoring an exclusion. Reservations coordinate this application, but Windows or other programs can change Defender independently.
 
 Global actions update `AutoGameModeEnabled` and `GameDVR_Enabled` for the current Windows user; their effectiveness depends on Windows and policy settings. The previous registry values and types are journaled before each write. If interrupted, use Restore in the global settings page; external changes are not overwritten.
 
@@ -77,6 +79,33 @@ If interrupted or restoration fails, keep the same `GAME_OPTIMIZER_TEST_JOURNAL`
 cargo test --manifest-path src-tauri\Cargo.toml recover_dummy_gpu_journal -- --ignored --nocapture
 ```
 
+## Real Defender test
+
+This opt-in test requires several UAC approvals. It temporarily adds exclusions for a new folder and a disposable executable inside it, then attempts to restore them and verify the result. The folder exclusion affects all its files while active, so do not put other files there. The journal is stored separately.
+
+```powershell
+$id = [guid]::NewGuid().ToString('N')
+$dir = Join-Path $env:TEMP "GameOptimizerDefenderTest-$id"
+$dummyDir = Join-Path $dir 'dummy'
+New-Item -ItemType Directory -Path $dummyDir | Out-Null
+$env:GAME_OPTIMIZER_DUMMY_EXE = Join-Path $dummyDir "dummy-$id.exe"
+$env:GAME_OPTIMIZER_SERVICE_ROOT = Join-Path $dir 'journal'
+rustc --edition 2021 tests\fixtures\dummy.rs -o $env:GAME_OPTIMIZER_DUMMY_EXE
+if ($LASTEXITCODE -ne 0) { throw 'Failed to build the dummy executable' }
+cargo build --manifest-path src-tauri\Cargo.toml
+if ($LASTEXITCODE -ne 0) { throw 'Failed to build the administrator helper' }
+$env:GAME_OPTIMIZER_HELPER_EXE = (Resolve-Path src-tauri\target\debug\game-optimizer-app.exe).Path
+cargo test --manifest-path src-tauri\Cargo.toml real_dummy_coordinated_defender_profile_applies_and_restores -- --ignored --nocapture
+```
+
+If the test is interrupted or restoration fails, keep the directory and journal. With the same `GAME_OPTIMIZER_DUMMY_EXE`, `GAME_OPTIMIZER_SERVICE_ROOT` and `GAME_OPTIMIZER_HELPER_EXE`, try to recover the journal:
+
+```powershell
+cargo test --manifest-path src-tauri\Cargo.toml recover_full_profile -- --ignored --nocapture
+```
+
+Do not delete the directory or journal until the exclusions have been verified as restored.
+
 ## Pending work
 
-Defender resource snapshots record the Windows volume and file ID, and identity-based reservations recognize hard links to the same file. Defender profile actions remain disabled: overlapping folders and secure cross-user coordination are not yet handled. CPU restoration restores the priority value but can leave empty IFEO registry keys created during application. Comprehensive UI and interruption testing is still needed.
+Defender resource snapshots record the Windows volume and file ID. CPU restoration restores the priority value but can leave empty IFEO registry keys created during application. Comprehensive UI and interruption testing is still needed.

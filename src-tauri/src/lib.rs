@@ -13,6 +13,8 @@ mod cpu;
 #[cfg(windows)]
 mod defender;
 #[cfg(windows)]
+mod defender_coordination;
+#[cfg(windows)]
 mod executable_name;
 #[cfg(windows)]
 mod global;

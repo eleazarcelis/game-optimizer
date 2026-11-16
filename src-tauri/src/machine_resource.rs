@@ -11,8 +11,7 @@ use windows_sys::Win32::{
     UI::Shell::{FOLDERID_ProgramData, SHGetKnownFolderPath},
 };
 
-pub fn directory() -> Result<PathBuf, String> {
-    log::info!("Resolving machine-wide resource directory");
+pub fn program_data() -> Result<PathBuf, String> {
     let mut buffer = std::ptr::null_mut();
     // The returned path is allocated by Windows and must be released with CoTaskMemFree.
     let result = unsafe {
@@ -32,11 +31,15 @@ pub fn directory() -> Result<PathBuf, String> {
         let path = String::from_utf16(std::slice::from_raw_parts(buffer, length));
         CoTaskMemFree(buffer.cast());
         let path = path.map_err(|e| format!("Invalid ProgramData path: {e}"))?;
-        let directory = PathBuf::from(path).join("GameOptimizer").join("resources");
-        fs::create_dir_all(&directory)
-            .map_err(|e| format!("Cannot create resource directory: {e}"))?;
-        Ok(directory)
+        Ok(PathBuf::from(path))
     }
+}
+
+pub fn directory() -> Result<PathBuf, String> {
+    log::info!("Resolving machine-wide resource directory");
+    let directory = program_data()?.join("GameOptimizer").join("resources");
+    fs::create_dir_all(&directory).map_err(|e| format!("Cannot create resource directory: {e}"))?;
+    Ok(directory)
 }
 
 pub fn claim(path: &Path, owner: &str) -> Result<(), String> {

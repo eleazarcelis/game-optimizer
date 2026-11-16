@@ -55,10 +55,9 @@ export function fileName(path: string): string {
 }
 
 export function availableProfileActions(profile: Profile | undefined) {
-  if (!profile || (profile.cpu === "none" && profile.gpu === "none")) return null;
+  if (!profile || (profile.cpu === "none" && profile.gpu === "none" && !profile.defender)) return null;
   return {
-    actions: { cpu: profile.cpu, gpu: profile.gpu, defender: false },
-    defenderSkipped: profile.defender,
+    actions: { cpu: profile.cpu, gpu: profile.gpu, defender: profile.defender },
   };
 }
 

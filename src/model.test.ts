@@ -48,15 +48,18 @@ describe("library state", () => {
     expect(isAppState({ ...state, libraryNoticeDismissed: "true" })).toBe(false);
     expect(isAppState({ ...state, globalNoticeDismissed: "true" })).toBe(false);
   });
-  it("starts with usable profiles while Defender actions are unavailable", () => {
+  it("starts with Defender actions disabled by default", () => {
     expect(initialState().profiles.every((profile) => !profile.defender)).toBe(true);
   });
-  it("allows supported actions while explicitly reporting a skipped Defender action", () => {
+  it("includes an explicitly enabled Defender action, even without CPU or GPU actions", () => {
     const profile = { ...initialState().profiles[0], defender: true };
     expect(availableProfileActions(profile)).toEqual({
-      actions: { cpu: "high", gpu: "high", defender: false }, defenderSkipped: true,
+      actions: { cpu: "high", gpu: "high", defender: true },
     });
-    expect(availableProfileActions({ ...profile, cpu: "none", gpu: "none" })).toBeNull();
+    expect(availableProfileActions({ ...profile, cpu: "none", gpu: "none" })).toEqual({
+      actions: { cpu: "none", gpu: "none", defender: true },
+    });
+    expect(availableProfileActions({ ...profile, cpu: "none", gpu: "none", defender: false })).toBeNull();
     expect(availableProfileActions(undefined)).toBeNull();
   });
 });

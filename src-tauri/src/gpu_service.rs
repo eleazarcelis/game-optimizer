@@ -50,30 +50,31 @@ fn requests(
     {
         return Err(error("INVALID_PROFILE", "Invalid profile action"));
     }
-    if profile.defender {
+    if defaults && profile.defender {
         return Err(error(
-            "DEFENDER_UNVERIFIED",
-            "Defender exclusions are disabled until overlap and cross-user coordination are verified; no settings were changed",
+            "INVALID_PROFILE",
+            "Defender exclusions cannot be removed through defaults; restore the active transaction",
         ));
     }
     validate_path(path)?;
     let mut steps = Vec::new();
+    if profile.defender {
+        let folder = Path::new(path)
+            .parent()
+            .and_then(Path::to_str)
+            .ok_or_else(|| error("INVALID_EXECUTABLE", "Executable folder is invalid"))?;
+        let owner = uuid::Uuid::new_v4();
+        for (kind, target) in [("defender-path", folder), ("defender-process", path)] {
+            defender::validate_target(kind, target).map_err(|e| error("INVALID_EXECUTABLE", e))?;
+            steps.push(StepRequest { id:kind.into(), action:json!({"kind":kind,"path":path,"target":target,"owner":owner,"enabled":true,"coordinated":true}) });
+        }
+    }
     if profile.cpu != "none" {
         crate::privileged::cpu_name(path).map_err(|e| error("INVALID_EXECUTABLE", e))?;
         steps.push(StepRequest { id:"cpu".into(), action:json!({"kind":"cpu","path":path,"priority":if defaults {0} else if profile.cpu == "high" {3} else {1},"owner":uuid::Uuid::new_v4()}) });
     }
     if profile.gpu != "none" {
         steps.push(StepRequest { id:"gpu".into(), action:json!({"kind":"gpu","path":path,"preference":if defaults {0} else if profile.gpu == "high" {2} else {1}}) });
-    }
-    if profile.defender {
-        let folder = Path::new(path)
-            .parent()
-            .and_then(Path::to_str)
-            .ok_or_else(|| error("INVALID_EXECUTABLE", "Executable folder is invalid"))?;
-        for (kind, target) in [("defender-path", folder), ("defender-process", path)] {
-            defender::validate_target(kind, target).map_err(|e| error("INVALID_EXECUTABLE", e))?;
-            steps.push(StepRequest { id:kind.into(), action:json!({"kind":kind,"path":path,"target":target,"owner":uuid::Uuid::new_v4(),"enabled":!defaults}) });
-        }
     }
     if steps.is_empty() && !defaults {
         return Err(error("NO_ACTION", "The profile has no enabled actions"));
@@ -228,6 +229,7 @@ fn find_active(dir: &Path, path: &str) -> Result<Option<PathBuf>, AppError> {
             };
             result.map_err(|e| error("JOURNAL_INVALID", e))?;
         }
+        validate_coordinated_defender(&tx.journal.steps)?;
         validate_reset(&tx)?;
         if tx.journal.reset.is_some()
             || tx.journal.steps.iter().any(|s| {
@@ -247,6 +249,35 @@ fn find_active(dir: &Path, path: &str) -> Result<Option<PathBuf>, AppError> {
         }
     }
     Ok(active)
+}
+
+fn validate_coordinated_defender(steps: &[Step]) -> Result<(), AppError> {
+    let coordinated: Vec<_> = steps
+        .iter()
+        .filter(|step| {
+            step.action
+                .get("coordinated")
+                .and_then(|value| value.as_bool())
+                == Some(true)
+        })
+        .collect();
+    if coordinated.is_empty() {
+        return Ok(());
+    }
+    if coordinated.len() != 2
+        || coordinated[0].id != "defender-path"
+        || coordinated[1].id != "defender-process"
+        || coordinated[0].action.get("owner") != coordinated[1].action.get("owner")
+        || coordinated
+            .iter()
+            .any(|step| step.action.get("enabled").and_then(|value| value.as_bool()) != Some(true))
+    {
+        return Err(error(
+            "JOURNAL_INVALID",
+            "Invalid coordinated Defender transaction",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_reset(tx: &Transaction) -> Result<(), AppError> {
@@ -550,6 +581,56 @@ mod tests {
     }
 
     #[test]
+    fn defender_only_profile_reserves_both_resources_and_defaults_rejects_it() {
+        let profile = ProfileActions {
+            cpu: "none".into(),
+            gpu: "none".into(),
+            defender: true,
+        };
+        let steps = requests(r"C:\Games\Demo.exe", &profile, false).unwrap();
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0].id, "defender-path");
+        assert_eq!(steps[0].action["target"], r"C:\Games");
+        assert_eq!(steps[1].id, "defender-process");
+        assert_eq!(steps[1].action["target"], r"C:\Games\Demo.exe");
+        assert_eq!(steps[0].action["owner"], steps[1].action["owner"]);
+        assert!(steps.iter().all(|step| step.action["coordinated"] == true));
+        assert_eq!(
+            requests(r"C:\Games\Demo.exe", &profile, true)
+                .err()
+                .unwrap()
+                .code,
+            "INVALID_PROFILE"
+        );
+    }
+
+    #[test]
+    fn coordinated_journal_requires_matching_resource_pair() {
+        let profile = ProfileActions {
+            cpu: "none".into(),
+            gpu: "none".into(),
+            defender: true,
+        };
+        let requests = requests(r"C:\Games\Demo.exe", &profile, false).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let tx = Transaction::create(&dir.path().join("tx.json"), &requests).unwrap();
+        let mut steps = tx.journal.steps.clone();
+        assert!(validate_coordinated_defender(&steps).is_ok());
+        steps[1].action["owner"] = json!(uuid::Uuid::new_v4());
+        assert_eq!(
+            validate_coordinated_defender(&steps).err().unwrap().code,
+            "JOURNAL_INVALID"
+        );
+        assert_eq!(
+            validate_coordinated_defender(&steps[..1])
+                .err()
+                .unwrap()
+                .code,
+            "JOURNAL_INVALID"
+        );
+    }
+
+    #[test]
     fn resource_lock_and_unfinished_journal_prevent_overlapping_transactions() {
         let root = tempfile::tempdir().unwrap();
         let path = r"C:\Games\Demo.exe";
@@ -768,7 +849,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Defender profile actions are currently disabled"]
+    #[ignore = "requires UAC and changes CPU, GPU and Defender settings for a disposable executable"]
     fn real_full_profile_applies_and_restores() {
         let executable =
             std::env::var("GAME_OPTIMIZER_DUMMY_EXE").expect("Set GAME_OPTIMIZER_DUMMY_EXE");
@@ -817,6 +898,59 @@ mod tests {
             crate::privileged::query_defender("defender-process", &executable).unwrap(),
             before_process
         );
+    }
+
+    #[test]
+    #[ignore = "requires UAC and temporarily changes Defender exclusions for a disposable executable"]
+    fn real_dummy_coordinated_defender_profile_applies_and_restores() {
+        let executable =
+            std::env::var("GAME_OPTIMIZER_DUMMY_EXE").expect("Set GAME_OPTIMIZER_DUMMY_EXE");
+        let root = PathBuf::from(
+            std::env::var("GAME_OPTIMIZER_SERVICE_ROOT").expect("Set GAME_OPTIMIZER_SERVICE_ROOT"),
+        );
+        let folder = Path::new(&executable).parent().unwrap().to_str().unwrap();
+        assert!(!crate::privileged::query_defender("defender-path", folder).unwrap());
+        assert!(!crate::privileged::query_defender("defender-process", &executable).unwrap());
+        assert_eq!(status(&root, &executable).unwrap().state, "none");
+        struct Guard<'a>(&'a Path, &'a str);
+        impl Drop for Guard<'_> {
+            fn drop(&mut self) {
+                if let Err(e) = restore(self.0, self.1) {
+                    if e.code != "NO_BACKUP" {
+                        eprintln!("RECOVERY REQUIRED: {}: {}", e.code, e.message);
+                    }
+                }
+            }
+        }
+        let _guard = Guard(&root, &executable);
+        let profile = ProfileActions {
+            cpu: "none".into(),
+            gpu: "none".into(),
+            defender: true,
+        };
+        apply(&root, &executable, &profile, false).unwrap();
+        assert_eq!(status(&root, &executable).unwrap().state, "unverified");
+        assert!(crate::privileged::query_defender("defender-path", folder).unwrap());
+        assert!(crate::privileged::query_defender("defender-process", &executable).unwrap());
+        let nested_folder = Path::new(folder).join("nested");
+        fs::create_dir(&nested_folder).unwrap();
+        let nested = nested_folder.join("second.exe");
+        fs::copy(&executable, &nested).unwrap();
+        let nested = nested.to_str().unwrap();
+        let _nested_guard = Guard(&root, nested);
+        let conflict = apply(&root, nested, &profile, false).unwrap_err();
+        assert!(
+            conflict.message.contains("overlaps"),
+            "{}",
+            conflict.message
+        );
+        assert_eq!(status(&root, nested).unwrap().state, "none");
+        assert!(crate::privileged::query_defender("defender-path", folder).unwrap());
+        assert!(crate::privileged::query_defender("defender-process", &executable).unwrap());
+        restore(&root, &executable).unwrap();
+        assert_eq!(status(&root, &executable).unwrap().state, "none");
+        assert!(!crate::privileged::query_defender("defender-path", folder).unwrap());
+        assert!(!crate::privileged::query_defender("defender-process", &executable).unwrap());
     }
 
     #[test]
