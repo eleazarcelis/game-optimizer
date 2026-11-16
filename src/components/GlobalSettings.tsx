@@ -48,10 +48,10 @@ export function GlobalSettings({ state, update, confirmAction, ensureSaved, show
   }
   const statusLabel = failed ? t(lang, statusErrorDismissed ? "notOptimized" : "globalStatusError") : !status ? t(lang, "loading")
     : t(lang, status.state === "none" ? "globalNone" : status.state === "applied" ? "globalApplied" : status.state === "conflict" ? "globalConflict" : "gpuRecovery");
-  return <section>
+  return <section className="page">
     <header className="page-header"><div><span className="eyebrow">GAME OPTIMIZER / {t(lang, "global").toUpperCase()}</span><h1>{t(lang, "global")}</h1><p>{t(lang, "globalSubtitle")}</p></div></header>
     {!state.globalNoticeDismissed && <DismissibleNotice language={lang} dismiss={() => update({ ...state, globalNoticeDismissed: true })}>{t(lang, "globalNote")} {t(lang, "globalPreview")}</DismissibleNotice>}
-    <div className="profile-editor global-editor">
+    <div className="profile-editor global-editor scroll-panel" role="region" aria-label={t(lang, "global")} tabIndex={0}>
       {fields.map(({ key, values }) => <label className="field" key={key}>
         <span>{t(lang, key)}<small className="field-description">{t(lang, key === "power" ? "powerDesc" : key === "gameMode" ? "gameModeDesc" : "gameDvrDesc")}</small></span>
         <select value={settings[key]} onChange={(e) => update({ ...state, globalSettings: { ...settings, [key]: e.target.value as Choice } })}>

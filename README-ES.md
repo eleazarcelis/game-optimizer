@@ -7,7 +7,10 @@ Aplicación de escritorio para Windows construida con Tauri 2, React y TypeScrip
 ## Funcionalidades actuales
 
 - Interfaz en inglés y español.
-- Biblioteca de ejecutables con vista en grilla o lista, iconos de Windows y nombres de los metadatos del ejecutable cuando están disponibles. El aviso de la biblioteca se puede cerrar permanentemente.
+- Biblioteca en grilla con iconos de Windows y nombres de metadatos, favoritos primero, orden A–Z/Z–A o manual y agrupamiento opcional y colapsable por nombres relacionados. La agrupación usa una heurística de prefijos y puede no acertar siempre. El orden manual se guarda; los controles de arrastre también admiten las flechas del teclado. El aviso de la biblioteca se puede cerrar permanentemente.
+- En orden manual se puede arrastrar la tarjeta o usar su control con el teclado. Al agrupar, los grupos con favoritos aparecen primero y sus favoritos se muestran al inicio. El orden manual respeta esa prioridad y permite ordenar dentro de un grupo o mover el grupo completo desde su control.
+- Al arrastrar, una línea marca la posición exacta de inserción; no se muestra si la posición no cambia el orden o no está permitida.
+- Ventana con navegación y encabezados fijos: solo se desplaza el contenido de los paneles, con barras de desplazamiento de estilo oscuro/violeta y acceso por teclado.
 - Agregar ejecutables mediante el selector o arrastrándolos; se asigna un perfil al agregarlos.
 - Abrir la carpeta de un ejecutable o ejecutarlo mediante su botón o icono. En Configuración se elige si la app se minimiza (por defecto) o se cierra tras iniciar correctamente; ejecutar no aplica el perfil automáticamente.
 - Administrar el idioma y el comportamiento al ejecutar en Configuración > General, y los perfiles predeterminados y personalizados en Configuración > Perfiles.

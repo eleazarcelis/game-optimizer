@@ -11,7 +11,8 @@ export type Profile = {
   gameDvr: Choice;
   defender: boolean;
 };
-export type Executable = { path: string; profileId: string };
+export type Executable = { path: string; profileId: string; favorite?: boolean };
+export type LibrarySort = "az" | "za" | "manual";
 export type GlobalSettings = { power: Choice; gameMode: Choice; gameDvr: Choice };
 export type LaunchBehavior = "minimize" | "close";
 export type AppState = {
@@ -19,6 +20,8 @@ export type AppState = {
   language: Language;
   view: "grid" | "list";
   iconSize: number;
+  librarySort?: LibrarySort;
+  groupByName?: boolean;
   profiles: Profile[];
   executables: Executable[];
   globalSettings?: GlobalSettings;
@@ -81,8 +84,11 @@ export function isAppState(value: unknown): value is AppState {
   if (state.launchBehavior !== undefined && !["minimize", "close"].includes(state.launchBehavior)) return false;
   if (state.libraryNoticeDismissed !== undefined && typeof state.libraryNoticeDismissed !== "boolean") return false;
   if (state.globalNoticeDismissed !== undefined && typeof state.globalNoticeDismissed !== "boolean") return false;
+  if (state.librarySort !== undefined && !["az", "za", "manual"].includes(state.librarySort)) return false;
+  if (state.groupByName !== undefined && typeof state.groupByName !== "boolean") return false;
   const ids = new Set(state.profiles.map((p) => p.id));
   return state.executables.every((e) => e && typeof e.path === "string" && isExe(e.path)
-    && typeof e.profileId === "string" && ids.has(e.profileId))
+    && typeof e.profileId === "string" && ids.has(e.profileId)
+    && (e.favorite === undefined || typeof e.favorite === "boolean"))
     && new Set(state.executables.map((e) => e.path.toLowerCase())).size === state.executables.length;
 }

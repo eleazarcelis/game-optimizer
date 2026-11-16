@@ -7,7 +7,10 @@ A Windows desktop application built with Tauri 2, React and TypeScript.
 ## Current features
 
 - English and Spanish UI.
-- Executable library with grid/list views, Windows file icons and names from executable metadata when available. The library notice can be dismissed permanently.
+- Grid library with Windows icons and executable metadata names, favorites first, A–Z/Z–A or manual ordering, and optional collapsible groups of related names. Grouping uses a name-prefix heuristic and may not always match correctly. Manual order is saved; drag handles also support arrow keys. The library notice can be dismissed permanently.
+- In manual mode, drag a card or use its keyboard handle. With grouping enabled, groups containing favorites come first and favorite members appear first within their group. Manual reordering stays within the favorite/non-favorite priority and within a group, while group handles move whole groups.
+- While dragging, a line marks the exact insertion position; it is hidden for positions that would not change the order or are not allowed.
+- Fixed navigation and page headers: only panel contents scroll, with dark/purple scrollbars and keyboard access.
 - Add executables using the file picker or drag and drop; assign a profile when adding.
 - Open an executable's folder or launch it with its button or icon. In Settings, choose whether the app minimizes (default) or closes after a successful launch; starting a game does not automatically apply a profile.
 - Manage language and launch behavior under Settings > General, and built-in and custom profiles under Settings > Profiles.
