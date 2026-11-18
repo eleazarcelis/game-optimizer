@@ -71,7 +71,7 @@ jobs:
             throw "Executable version $actual does not match package.json version $expected."
           }
 
-      - name: Attach executable and license to release
+      - name: Attach executable, checksum and license to release
         if: github.event_name == 'release'
         shell: pwsh
         env:
@@ -80,5 +80,15 @@ jobs:
         run: |
           $asset = "Game-Optimizer-$env:RELEASE_TAG-windows-x64.exe"
           Copy-Item 'src-tauri\target\release\game-optimizer-app.exe' $asset
-          gh release upload $env:RELEASE_TAG $asset LICENSE
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $asset).Hash.ToLowerInvariant()
+          $checksumFile = "$asset.sha256"
+          # Standard "<hash>  <file>" format, compatible with sha256sum -c.
+          [System.IO.File]::WriteAllText(
+            (Join-Path (Get-Location) $checksumFile),
+            "$hash  $asset`n",
+            [System.Text.UTF8Encoding]::new($false)
+          )
+          "SHA-256 of ${asset}: $hash"
+          "### SHA-256`n`n``$hash``  $asset" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          gh release upload $env:RELEASE_TAG $asset $checksumFile LICENSE
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
