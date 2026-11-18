@@ -34,6 +34,37 @@ use windows_sys::Win32::{
 
 const DIRECTORY: &str = "GameOptimizer-Defender-2739818f";
 const SDDL: &str = "O:BAD:P(A;OICI;0x001f01ff;;;BA)(A;OICI;0x001f01ff;;;SY)";
+pub const OVERLAP: &str = "Defender exclusion overlaps another active profile";
+pub const PROCESS_OVERLAP: &str = "Defender process exclusion belongs to another active profile";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Scope {
+    Folder,
+    Process,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Scopes {
+    folder: bool,
+    process: bool,
+}
+
+impl Scopes {
+    fn contains(&self, scope: Scope) -> bool {
+        match scope {
+            Scope::Folder => self.folder,
+            Scope::Process => self.process,
+        }
+    }
+
+    fn set(&mut self, scope: Scope, value: bool) {
+        match scope {
+            Scope::Folder => self.folder = value,
+            Scope::Process => self.process = value,
+        }
+    }
+}
 
 struct SecurityDescriptor(PSECURITY_DESCRIPTOR);
 impl Drop for SecurityDescriptor {
@@ -132,6 +163,19 @@ pub struct Coordinator {
 }
 
 impl Coordinator {
+    #[cfg(test)]
+    pub(crate) fn for_test(directory: &Path) -> Self {
+        Self {
+            directory: directory.to_owned(),
+            _directory_handle: OpenOptions::new()
+                .access_mode(0)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(directory)
+                .unwrap(),
+            _lock: machine_resource::lock(&directory.join("coordination.lock")).unwrap(),
+        }
+    }
+
     pub fn open() -> Result<Self, String> {
         let directory = machine_resource::program_data()?.join(DIRECTORY);
         let security = descriptor(SDDL)?;
@@ -162,7 +206,13 @@ impl Coordinator {
                 fs::read(&path).map_err(|e| format!("Cannot read Defender reservation: {e}"))?;
             let record: Reservation = serde_json::from_slice(&bytes)
                 .map_err(|e| format!("Invalid Defender reservation: {e}"))?;
-            if record.ancestors.is_empty() || path != self.path(record.owner) {
+            if record.ancestors.is_empty()
+                || path != self.path(record.owner)
+                || record
+                    .scopes
+                    .as_ref()
+                    .is_some_and(|s| !s.folder && !s.process)
+            {
                 return Err("Invalid Defender reservation identity".into());
             }
             records.push(record);
@@ -170,34 +220,65 @@ impl Coordinator {
         Ok(records)
     }
 
-    pub fn claim(&self, requested: &Reservation) -> Result<(), String> {
-        for record in self.records()? {
+    pub fn claim(&self, requested: &Reservation, scope: Scope) -> Result<(), String> {
+        let records = self.records()?;
+        let mut existing = None;
+        for record in &records {
             if record.owner == requested.owner {
-                return if &record == requested {
-                    Ok(())
-                } else {
-                    Err("Defender reservation identity changed".into())
-                };
+                if !record.same_identity(requested) {
+                    return Err("Defender reservation identity changed".into());
+                }
+                if record.has_scope(scope) {
+                    return Ok(());
+                }
+                existing = Some(record.clone());
+                continue;
             }
-            if record.conflicts(requested) {
-                return Err("Defender exclusion overlaps another active profile".into());
+            if record.has_scope(scope) && record.conflicts(requested, scope) {
+                return Err(match scope {
+                    Scope::Folder => OVERLAP,
+                    Scope::Process => PROCESS_OVERLAP,
+                }
+                .into());
             }
         }
-        let bytes = serde_json::to_vec(requested).map_err(|e| e.to_string())?;
+        let mut updated = existing.clone().unwrap_or_else(|| {
+            let mut value = requested.clone();
+            value.scopes = Some(Scopes {
+                folder: false,
+                process: false,
+            });
+            value
+        });
+        updated
+            .scopes
+            .as_mut()
+            .expect("legacy reservations already own both scopes")
+            .set(scope, true);
+        self.write(&updated, existing.is_some())
+    }
+
+    fn write(&self, record: &Reservation, replace: bool) -> Result<(), String> {
+        let bytes = serde_json::to_vec(record).map_err(|e| e.to_string())?;
         let mut temp = tempfile::NamedTempFile::new_in(&self.directory)
             .map_err(|e| format!("Cannot create Defender reservation: {e}"))?;
         temp.write_all(&bytes)
             .and_then(|_| temp.as_file().sync_all())
             .map_err(|e| format!("Cannot persist Defender reservation: {e}"))?;
-        temp.persist_noclobber(self.path(requested.owner))
-            .map_err(|e| format!("Cannot claim Defender reservation: {}", e.error))?;
+        if replace {
+            temp.persist(self.path(record.owner))
+                .map_err(|e| format!("Cannot update Defender reservation: {}", e.error))?;
+        } else {
+            temp.persist_noclobber(self.path(record.owner))
+                .map_err(|e| format!("Cannot claim Defender reservation: {}", e.error))?;
+        }
         Ok(())
     }
 
     pub fn owned(&self, requested: &Reservation) -> Result<bool, String> {
         for record in self.records()? {
             if record.owner == requested.owner {
-                return if &record == requested {
+                return if record.same_identity(requested) {
                     Ok(true)
                 } else {
                     Err("Defender reservation identity changed".into())
@@ -205,6 +286,75 @@ impl Coordinator {
             }
         }
         Ok(false)
+    }
+
+    pub fn owns_scope(&self, requested: &Reservation, scope: Scope) -> Result<bool, String> {
+        for record in self.records()? {
+            if record.owner == requested.owner {
+                if !record.same_identity(requested) {
+                    return Err("Defender reservation identity changed".into());
+                }
+                return Ok(record.has_scope(scope));
+            }
+        }
+        Ok(false)
+    }
+
+    pub fn folder_conflicts(
+        &self,
+        requested: &Reservation,
+    ) -> Result<Vec<(Uuid, Option<String>)>, String> {
+        let mut conflicts = Vec::new();
+        for record in self.records()? {
+            if record.owner == requested.owner
+                || !record.has_scope(Scope::Folder)
+                || !record.conflicts(requested, Scope::Folder)
+            {
+                continue;
+            }
+            let path = match record.folder_path {
+                Some(path) => match Target::open(&path, true) {
+                    Ok(target) if target.identity() == &record.ancestors[0] => Some(path),
+                    Ok(_) => {
+                        log::warn!("Conflicting Defender folder identity changed");
+                        None
+                    }
+                    Err(error) => {
+                        log::warn!("Cannot identify conflicting Defender folder: {error}");
+                        None
+                    }
+                },
+                None => None,
+            };
+            conflicts.push((record.owner, path));
+        }
+        Ok(conflicts)
+    }
+
+    pub fn release_scope(&self, requested: &Reservation, scope: Scope) -> Result<(), String> {
+        for mut record in self.records()? {
+            if record.owner != requested.owner {
+                continue;
+            }
+            if !record.same_identity(requested) || !record.has_scope(scope) {
+                return Err("Defender reservation identity changed".into());
+            }
+            if record.scopes.is_none() {
+                return if scope == Scope::Folder {
+                    self.release(requested)
+                } else {
+                    Ok(())
+                };
+            }
+            let scopes = record.scopes.as_mut().expect("checked above");
+            scopes.set(scope, false);
+            return if scopes.folder || scopes.process {
+                self.write(&record, true)
+            } else {
+                self.release(requested)
+            };
+        }
+        Err("Defender reservation is missing".into())
     }
 
     pub fn release(&self, requested: &Reservation) -> Result<(), String> {
@@ -264,12 +414,16 @@ fn open_directory(directory: &Path, security: &SecurityDescriptor) -> Result<Fil
     Ok(handle)
 }
 
-#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Reservation {
     owner: Uuid,
     ancestors: Vec<Identity>,
     executable: Identity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scopes: Option<Scopes>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    folder_path: Option<String>,
 }
 
 impl Reservation {
@@ -298,15 +452,33 @@ impl Reservation {
                 owner,
                 ancestors,
                 executable,
+                scopes: None,
+                folder_path: Some(folder.to_string_lossy().into_owned()),
             },
             held,
         ))
     }
 
-    fn conflicts(&self, other: &Self) -> bool {
-        self.executable == other.executable
-            || self.ancestors.contains(&other.ancestors[0])
-            || other.ancestors.contains(&self.ancestors[0])
+    fn same_identity(&self, other: &Self) -> bool {
+        self.owner == other.owner
+            && self.ancestors == other.ancestors
+            && self.executable == other.executable
+    }
+
+    fn has_scope(&self, scope: Scope) -> bool {
+        self.scopes
+            .as_ref()
+            .is_none_or(|scopes| scopes.contains(scope))
+    }
+
+    fn conflicts(&self, other: &Self, scope: Scope) -> bool {
+        match scope {
+            Scope::Process => self.executable == other.executable,
+            Scope::Folder => {
+                self.ancestors.contains(&other.ancestors[0])
+                    || other.ancestors.contains(&self.ancestors[0])
+            }
+        }
     }
 }
 
@@ -397,17 +569,22 @@ mod tests {
             owner,
             ancestors: ancestors.iter().map(|id| identity(*id)).collect(),
             executable: identity(executable),
+            scopes: None,
+            folder_path: None,
         }
     }
 
     #[test]
     fn detects_equal_nested_and_hard_linked_resources_but_not_siblings() {
         let root = reservation(Uuid::new_v4(), &[3, 2, 1], 10);
-        assert!(root.conflicts(&reservation(Uuid::new_v4(), &[3, 2, 1], 11)));
-        assert!(root.conflicts(&reservation(Uuid::new_v4(), &[4, 3, 2, 1], 11)));
-        assert!(root.conflicts(&reservation(Uuid::new_v4(), &[2, 1], 11)));
-        assert!(root.conflicts(&reservation(Uuid::new_v4(), &[5, 2, 1], 10)));
-        assert!(!root.conflicts(&reservation(Uuid::new_v4(), &[5, 2, 1], 11)));
+        assert!(root.conflicts(&reservation(Uuid::new_v4(), &[3, 2, 1], 11), Scope::Folder));
+        assert!(root.conflicts(
+            &reservation(Uuid::new_v4(), &[4, 3, 2, 1], 11),
+            Scope::Folder
+        ));
+        assert!(root.conflicts(&reservation(Uuid::new_v4(), &[2, 1], 11), Scope::Folder));
+        assert!(root.conflicts(&reservation(Uuid::new_v4(), &[5, 2, 1], 10), Scope::Process));
+        assert!(!root.conflicts(&reservation(Uuid::new_v4(), &[5, 2, 1], 11), Scope::Folder));
     }
 
     #[test]
@@ -427,9 +604,9 @@ mod tests {
         let (a, a_handles) = Reservation::open(a.to_str().unwrap(), Uuid::new_v4()).unwrap();
         let (b, b_handles) = Reservation::open(b.to_str().unwrap(), Uuid::new_v4()).unwrap();
         let (c, c_handles) = Reservation::open(c.to_str().unwrap(), Uuid::new_v4()).unwrap();
-        assert!(a.conflicts(&b));
-        assert!(a.conflicts(&c));
-        assert!(!b.conflicts(&c));
+        assert!(a.conflicts(&b, Scope::Folder));
+        assert!(a.conflicts(&c, Scope::Process));
+        assert!(!b.conflicts(&c, Scope::Folder));
         drop((a_handles, b_handles, c_handles));
     }
 
@@ -465,7 +642,7 @@ mod tests {
         let (child, child_handles) =
             Reservation::open(junction.join("child.exe").to_str().unwrap(), Uuid::new_v4())
                 .unwrap();
-        assert!(parent.conflicts(&child));
+        assert!(parent.conflicts(&child, Scope::Folder));
         drop((parent_handles, child_handles));
         fs::remove_dir(&junction).unwrap();
     }
@@ -483,18 +660,68 @@ mod tests {
         let a = reservation(Uuid::new_v4(), &[3, 2, 1], 10);
         let overlapping = reservation(Uuid::new_v4(), &[4, 3, 2, 1], 11);
         let sibling = reservation(Uuid::new_v4(), &[5, 2, 1], 12);
-        coordinator.claim(&a).unwrap();
+        coordinator.claim(&a, Scope::Folder).unwrap();
         assert!(coordinator.owned(&a).unwrap());
         assert!(
             coordinator
-                .claim(&overlapping)
+                .claim(&overlapping, Scope::Folder)
                 .unwrap_err()
                 .contains("overlaps")
         );
-        coordinator.claim(&sibling).unwrap();
+        coordinator.claim(&sibling, Scope::Folder).unwrap();
         coordinator.release(&a).unwrap();
-        coordinator.claim(&overlapping).unwrap();
+        coordinator.claim(&overlapping, Scope::Folder).unwrap();
         assert!(coordinator.owned(&overlapping).unwrap());
         assert!(coordinator.owned(&sibling).unwrap());
+    }
+
+    #[test]
+    fn folder_and_process_reservations_are_independent() {
+        let root = tempfile::tempdir().unwrap();
+        let coordinator = Coordinator::for_test(root.path());
+        let steam = reservation(Uuid::new_v4(), &[3, 2, 1], 10);
+        let helper = reservation(Uuid::new_v4(), &[4, 3, 2, 1], 11);
+        let same_process = reservation(Uuid::new_v4(), &[5, 2, 1], 11);
+        coordinator.claim(&steam, Scope::Folder).unwrap();
+        coordinator.claim(&steam, Scope::Process).unwrap();
+        assert_eq!(
+            coordinator.claim(&helper, Scope::Folder).unwrap_err(),
+            OVERLAP
+        );
+        coordinator.claim(&helper, Scope::Process).unwrap();
+        assert_eq!(
+            coordinator
+                .claim(&same_process, Scope::Process)
+                .unwrap_err(),
+            PROCESS_OVERLAP
+        );
+        assert!(coordinator.owns_scope(&steam, Scope::Folder).unwrap());
+        assert!(coordinator.owns_scope(&steam, Scope::Process).unwrap());
+        coordinator.release_scope(&steam, Scope::Folder).unwrap();
+        assert!(!coordinator.owns_scope(&steam, Scope::Folder).unwrap());
+        assert!(coordinator.owns_scope(&steam, Scope::Process).unwrap());
+        assert!(coordinator.owns_scope(&helper, Scope::Process).unwrap());
+        coordinator.claim(&helper, Scope::Folder).unwrap();
+        coordinator.release_scope(&helper, Scope::Process).unwrap();
+        assert!(coordinator.owns_scope(&helper, Scope::Folder).unwrap());
+        assert!(!coordinator.owns_scope(&helper, Scope::Process).unwrap());
+    }
+
+    #[test]
+    fn legacy_reservations_remain_owned_until_folder_restore() {
+        let root = tempfile::tempdir().unwrap();
+        let coordinator = Coordinator::for_test(root.path());
+        let old = reservation(Uuid::new_v4(), &[3, 2, 1], 10);
+        fs::write(
+            coordinator.path(old.owner),
+            serde_json::to_vec(&old).unwrap(),
+        )
+        .unwrap();
+        assert!(coordinator.owns_scope(&old, Scope::Folder).unwrap());
+        assert!(coordinator.owns_scope(&old, Scope::Process).unwrap());
+        coordinator.release_scope(&old, Scope::Process).unwrap();
+        assert!(coordinator.owns_scope(&old, Scope::Process).unwrap());
+        coordinator.release_scope(&old, Scope::Folder).unwrap();
+        assert!(!coordinator.owned(&old).unwrap());
     }
 }

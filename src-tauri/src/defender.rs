@@ -2,7 +2,7 @@ use crate::{
     machine_resource,
     privileged::{self, Job},
     resource_identity::{Identity, Target},
-    transaction::{Step, StepExecutor},
+    transaction::{Step, StepExecutor, StepStatus},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
@@ -27,6 +27,8 @@ struct Action {
     enabled: bool,
     #[serde(default)]
     coordinated: bool,
+    #[serde(default)]
+    independent: bool,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -57,6 +59,9 @@ pub fn validate_target(kind: &str, target: &str) -> Result<(), String> {
 
 fn action(step: &Step) -> Result<Action, String> {
     let action: Action = serde_json::from_value(step.action.clone()).map_err(|e| e.to_string())?;
+    if action.independent && !action.coordinated {
+        return Err("Independent Defender actions require coordination".into());
+    }
     validate_action_target(&action.kind, &action.path, &action.target)?;
     Ok(action)
 }
@@ -88,6 +93,63 @@ pub fn validate(step: &Step, path: &str) -> Result<(), String> {
         return Err("Defender journal path mismatch".into());
     }
     Ok(())
+}
+
+pub fn skipped_release_job(steps: &[Step]) -> Result<Option<Job>, String> {
+    let Some(folder) = steps.iter().find(|step| step.id == "defender-path") else {
+        return Ok(None);
+    };
+    let Some(process) = steps.iter().find(|step| step.id == "defender-process") else {
+        return Ok(None);
+    };
+    if [folder, process].iter().any(|step| {
+        step.status != StepStatus::Skipped
+            || step.error.as_deref() != Some("Defender exclusion changed externally")
+    }) {
+        return Ok(None);
+    }
+    let folder_action = action(folder)?;
+    let process_action = action(process)?;
+    if !folder_action.coordinated
+        || !process_action.coordinated
+        || !folder_action.enabled
+        || !process_action.enabled
+        || folder_action.owner != process_action.owner
+        || !folder_action
+            .path
+            .eq_ignore_ascii_case(&process_action.path)
+    {
+        return Err("Invalid skipped Defender reservation journal".into());
+    }
+    validate(folder, &folder_action.path)?;
+    validate(process, &folder_action.path)?;
+    let folder_before: Snapshot = serde_json::from_value(
+        folder
+            .before
+            .clone()
+            .ok_or("Missing Defender folder snapshot")?,
+    )
+    .map_err(|e| e.to_string())?;
+    let process_before: Snapshot = serde_json::from_value(
+        process
+            .before
+            .clone()
+            .ok_or("Missing Defender process snapshot")?,
+    )
+    .map_err(|e| e.to_string())?;
+    if !folder_before.excluded || !process_before.excluded {
+        return Err("Invalid skipped Defender snapshots".into());
+    }
+    Ok(Some(Job::DefenderReleaseSkipped {
+        path: folder_action.path,
+        owner: folder_action.owner,
+        folder_identity: folder_before
+            .identity
+            .ok_or("Missing Defender folder identity")?,
+        executable_identity: process_before
+            .identity
+            .ok_or("Missing Defender process identity")?,
+    }))
 }
 
 fn powershell(script: &str) -> Result<String, String> {
@@ -404,17 +466,25 @@ impl<P: Defender> StepExecutor for Executor<P> {
                 return Ok(());
             }
             if owner.as_deref() != Some(&expected) || current != action.enabled {
+                if owner.as_deref() == Some(&expected) {
+                    let _ = machine_resource::release(&self.reservation, &expected);
+                }
                 return Err("Defender exclusion or reservation changed externally; refusing to overwrite it".into());
             }
         }
-        self.defender.write(
+        if let Err(e) = self.defender.write(
             &action.kind,
             &action.target,
             action.owner,
             &identity,
             action.enabled,
             before.excluded,
-        )?;
+        ) {
+            if e.contains(crate::transaction::EXTERNAL_CHANGE) {
+                let _ = machine_resource::release(&self.reservation, &expected);
+            }
+            return Err(e);
+        }
         let _guard = machine_resource::lock(&self.lock)?;
         if self.defender.read(&action.kind, &action.target)? != before.excluded {
             return Err("Defender exclusion verification failed after restoration".into());
@@ -455,6 +525,36 @@ mod tests {
             self.0 = desired;
             Ok(())
         }
+    }
+
+    #[test]
+    fn only_completed_external_conflicts_are_candidates_for_cleanup() {
+        let owner = Uuid::new_v4();
+        let path = r"C:\Games\Demo\game.exe";
+        let identity = Identity {
+            volume: 1,
+            file_id: [1; 16],
+        };
+        let make = |kind: &str, target: &str| Step {
+            id: kind.into(),
+            action: json!({"kind":kind,"path":path,"target":target,"owner":owner,"enabled":true,"coordinated":true}),
+            status: StepStatus::Skipped,
+            before: Some(json!({"excluded":true,"identity":identity})),
+            error: Some("Defender exclusion changed externally".into()),
+        };
+        let mut steps = vec![
+            make("defender-path", r"C:\Games\Demo"),
+            make("defender-process", path),
+        ];
+        assert!(matches!(
+            skipped_release_job(&steps).unwrap(),
+            Some(Job::DefenderReleaseSkipped { .. })
+        ));
+        steps[1].status = StepStatus::Restoring;
+        assert!(skipped_release_job(&steps).unwrap().is_none());
+        steps[1].status = StepStatus::Skipped;
+        steps[1].action["owner"] = json!(Uuid::new_v4());
+        assert!(skipped_release_job(&steps).is_err());
     }
 
     #[test]
@@ -580,10 +680,9 @@ mod tests {
             reservation,
             lock,
         };
-        assert_eq!(
-            tx.restore(&mut unavailable).unwrap_err().code,
-            "RESTORE_FAILED"
-        );
+        tx.restore(&mut unavailable).unwrap();
+        assert_eq!(tx.skipped.len(), 1);
+        assert!(tx.skipped[0].retryable);
         drop(tx);
         let mut tx = Transaction::open(&path).unwrap();
         assert_eq!(
@@ -638,9 +737,10 @@ mod tests {
             reservation,
             lock,
         };
-        let error = tx.restore(&mut replaced).unwrap_err();
-        assert_eq!(error.code, "RESTORE_FAILED");
-        assert!(error.message.contains("identity changed"));
+        tx.restore(&mut replaced).unwrap();
+        assert_eq!(tx.skipped.len(), 1);
+        assert!(tx.skipped[0].retryable);
+        assert!(tx.skipped[0].message.contains("identity changed"));
         let step = &tx.journal.steps[0];
         let old_snapshot = json!({"excluded": false});
         assert!(

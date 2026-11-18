@@ -12,7 +12,7 @@ export type Profile = {
   defender: boolean;
 };
 export type ProfileActions = Pick<Profile, "cpu" | "gpu" | "defender">;
-export type Executable = { path: string; profileId: string; favorite?: boolean };
+export type Executable = { path: string; profileId: string; favorite?: boolean; suppressedWarnings?: string[] };
 export type LibrarySort = "az" | "za" | "manual";
 export type GlobalSettings = { power: Choice; gameMode: Choice; gameDvr: Choice };
 export type LaunchBehavior = "minimize" | "close";
@@ -96,6 +96,7 @@ export function isAppState(value: unknown): value is AppState {
   const ids = new Set(state.profiles.map((p) => p.id));
   return state.executables.every((e) => e && typeof e.path === "string" && isExe(e.path)
     && typeof e.profileId === "string" && ids.has(e.profileId)
-    && (e.favorite === undefined || typeof e.favorite === "boolean"))
+    && (e.favorite === undefined || typeof e.favorite === "boolean")
+    && (e.suppressedWarnings === undefined || (Array.isArray(e.suppressedWarnings) && e.suppressedWarnings.every((warning) => typeof warning === "string"))))
     && new Set(state.executables.map((e) => e.path.toLowerCase())).size === state.executables.length;
 }

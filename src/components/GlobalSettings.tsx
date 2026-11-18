@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { LoaderCircle, RotateCcw, X, Zap } from "lucide-react";
 import { defaultGlobalSettings, type AppState, type Choice, type GlobalSettings as Settings } from "../model";
 import { translate as t } from "../i18n";
+import { skippedText, type SkippedStep } from "../errors";
 import { DismissibleNotice } from "./DismissibleNotice";
 
 type Props = { state: AppState; update: (state: AppState) => void; confirmAction: (message: string) => Promise<boolean>; ensureSaved: () => Promise<void>; showError: (error: unknown) => void; activeOperations: string[]; launching: boolean; claimOperation: (key: string) => boolean; releaseOperation: (key: string) => void };
@@ -39,7 +40,11 @@ export function GlobalSettings({ state, update, confirmAction, ensureSaved, show
       if (!claimOperation("global-settings")) return;
       claimed = true;
       await ensureSaved();
-      await invoke(action === "apply" ? "apply_global" : "restore_global", action === "apply" ? { settings } : {});
+      if (action === "apply") await invoke("apply_global", { settings });
+      else {
+        const skipped = await invoke<SkippedStep[]>("restore_global");
+        skipped.forEach((step) => showError({ warning: skippedText(lang, [step]) }));
+      }
     } catch (error) {
       showError(error);
     } finally {

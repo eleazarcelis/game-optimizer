@@ -25,9 +25,9 @@ pub mod gpu;
 #[cfg(windows)]
 mod gpu_service;
 #[cfg(windows)]
-mod machine_resource;
-#[cfg(windows)]
 mod launcher;
+#[cfg(windows)]
+mod machine_resource;
 #[cfg(windows)]
 mod power;
 #[cfg(windows)]
@@ -186,11 +186,34 @@ async fn executable_name(path: String) -> Result<Option<String>, AppError> {
 }
 
 #[tauri::command]
-async fn launch_executable(path: String) -> Result<(), AppError> {
+async fn launch_executable(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<Option<&'static str>, AppError> {
     log::info!("Requesting executable launch");
-    tauri::async_runtime::spawn_blocking(move || launcher::launch(&path))
-        .await
-        .map_err(|e| error("LAUNCH_TASK", e))?
+    tauri::async_runtime::spawn_blocking(move || {
+        executable(&path)?;
+        let priority = require_instance(&app).and_then(|()| {
+            gpu_service::launch_cpu_priority(&data_dir(&app)?.join("transactions"), &path)
+        });
+        let (priority, mut warning) = match priority {
+            Ok(priority) => (priority, None),
+            Err(e) => {
+                log::warn!(
+                    "Cannot determine CPU priority for launch: {}: {}",
+                    e.code,
+                    e.message
+                );
+                (None, Some("priorityUnavailable"))
+            }
+        };
+        if let Some(launch_warning) = launcher::launch(&path, priority)? {
+            warning = Some(launch_warning);
+        }
+        Ok(warning)
+    })
+    .await
+    .map_err(|e| error("LAUNCH_TASK", e))?
 }
 
 #[tauri::command]
@@ -236,7 +259,7 @@ async fn apply_profile(
     app: tauri::AppHandle,
     path: String,
     profile: gpu_service::ProfileActions,
-) -> Result<(), AppError> {
+) -> Result<Vec<transaction::ApplyWarning>, AppError> {
     log::info!("Requesting profile application");
     tauri::async_runtime::spawn_blocking(move || {
         require_instance(&app)?;
@@ -260,14 +283,17 @@ async fn reset_profile(
     log::info!("Requesting profile defaults");
     tauri::async_runtime::spawn_blocking(move || {
         require_instance(&app)?;
-        gpu_service::apply(&data_dir(&app)?.join("transactions"), &path, &profile, true)
+        gpu_service::apply(&data_dir(&app)?.join("transactions"), &path, &profile, true).map(|_| ())
     })
     .await
     .map_err(|e| error("ACTION_TASK", e))?
 }
 
 #[tauri::command]
-async fn restore_profile(app: tauri::AppHandle, path: String) -> Result<(), AppError> {
+async fn restore_profile(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<Vec<transaction::SkippedStep>, AppError> {
     log::info!("Requesting profile restoration");
     tauri::async_runtime::spawn_blocking(move || {
         require_instance(&app)?;
@@ -300,7 +326,7 @@ async fn apply_global(app: tauri::AppHandle, settings: global::Settings) -> Resu
 }
 
 #[tauri::command]
-async fn restore_global(app: tauri::AppHandle) -> Result<(), AppError> {
+async fn restore_global(app: tauri::AppHandle) -> Result<Vec<transaction::SkippedStep>, AppError> {
     log::info!("Requesting global settings restoration");
     tauri::async_runtime::spawn_blocking(move || {
         require_instance(&app)?;

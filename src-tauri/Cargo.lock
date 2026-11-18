@@ -1014,6 +1014,7 @@ dependencies = [
  "tauri-plugin-log",
  "tempfile",
  "uuid",
+ "windows",
  "windows-sys 0.61.2",
  "winreg",
 ]

@@ -90,6 +90,13 @@ impl Cpu for WindowsCpu {
 }
 
 pub struct CpuExecutor;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CpuPriority {
+    Low,
+    High,
+}
+
 impl CpuExecutor {
     fn executor(step: &Step) -> Result<Executor<WindowsCpu>, String> {
         let action = action(step)?;
@@ -103,6 +110,18 @@ impl CpuExecutor {
     }
     pub fn matches_applied(&mut self, step: &Step) -> Result<bool, String> {
         Self::executor(step)?.matches_applied(step)
+    }
+    pub fn launch_priority(&mut self, step: &Step) -> Result<Option<CpuPriority>, String> {
+        let priority = match action(step)?.priority {
+            0 => return Ok(None),
+            1 => CpuPriority::Low,
+            3 => CpuPriority::High,
+            _ => return Err("Invalid CPU priority".into()),
+        };
+        if !self.matches_applied(step)? {
+            return Err("CPU priority or reservation changed externally".into());
+        }
+        Ok(Some(priority))
     }
     pub fn finish_reset(&mut self, step: &Step) -> Result<(), String> {
         log::info!("Releasing CPU reservation after reset");
@@ -219,14 +238,26 @@ impl<P: Cpu> StepExecutor for Executor<P> {
                 return Ok(());
             }
             if owner.as_deref() != Some(&expected) || current != desired {
+                if owner.as_deref() == Some(&expected) && !action.retain_reservation_on_restore {
+                    let _ = machine_resource::release(&self.reservation, &expected);
+                }
                 return Err(
                     "CPU priority or reservation changed externally; refusing to overwrite it"
                         .into(),
                 );
             }
         }
-        self.cpu
-            .write(&name, action.owner, desired, before.value.clone())?;
+        if let Err(e) = self
+            .cpu
+            .write(&name, action.owner, desired, before.value.clone())
+        {
+            if e.contains(crate::transaction::EXTERNAL_CHANGE)
+                && !action.retain_reservation_on_restore
+            {
+                let _ = machine_resource::release(&self.reservation, &expected);
+            }
+            return Err(e);
+        }
         let _guard = machine_resource::lock(&self.lock)?;
         if self.cpu.read(&name)? != before.value {
             return Err("CPU priority verification failed after restoration".into());
@@ -283,8 +314,26 @@ mod tests {
         tx.apply(&mut exec).unwrap();
         assert!(exec.matches_applied(&tx.journal.steps[0]).unwrap());
         exec.cpu.0 = Some(raw(2u32.to_reg_value()));
-        assert_eq!(tx.restore(&mut exec).unwrap_err().code, "RESTORE_FAILED");
-        exec.cpu.0 = Some(raw(3u32.to_reg_value()));
+        tx.restore(&mut exec).unwrap();
+        assert_eq!(tx.skipped.len(), 1);
+        assert_eq!(exec.cpu.0, Some(raw(2u32.to_reg_value())));
+    }
+
+    #[test]
+    fn cpu_transaction_restores_the_prior_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let request = StepRequest {
+            id: "cpu".into(),
+            action: json!({"kind":"cpu","path":r"C:\Games\same.exe","priority":3,"owner":Uuid::new_v4()}),
+        };
+        let mut tx = Transaction::create(&dir.path().join("tx.json"), &[request]).unwrap();
+        let original = Some(raw(5u32.to_reg_value()));
+        let mut exec = Executor {
+            cpu: Fake(original.clone()),
+            reservation: dir.path().join("cpu"),
+            lock: dir.path().join("cpu.lock"),
+        };
+        tx.apply(&mut exec).unwrap();
         tx.restore(&mut exec).unwrap();
         assert_eq!(exec.cpu.0, original);
         assert_eq!(machine_resource::owner(&exec.reservation).unwrap(), None);

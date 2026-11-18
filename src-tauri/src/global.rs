@@ -2,7 +2,9 @@ use crate::{
     AppError, error,
     gpu::{RawValue, raw, reg_type},
     power::{self, PowerExecutor},
-    transaction::{Step, StepExecutor, StepRequest, StepStatus, Transaction, TransactionError},
+    transaction::{
+        SkippedStep, Step, StepExecutor, StepRequest, StepStatus, Transaction, TransactionError,
+    },
 };
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -376,6 +378,7 @@ pub fn apply(root: &Path, settings: &Settings) -> Result<(), AppError> {
         let restore = tx.restore(&mut executor);
         let mut result = transaction_error(failure);
         result.message.push_str(&match restore {
+            Ok(()) if !tx.skipped.is_empty() => "; recovery required for skipped steps".into(),
             Ok(()) => "; previous settings restored".into(),
             Err(e) => format!("; recovery required: {}: {}", e.code, e.message),
         });
@@ -384,16 +387,16 @@ pub fn apply(root: &Path, settings: &Settings) -> Result<(), AppError> {
     Ok(())
 }
 
-pub fn restore(root: &Path) -> Result<(), AppError> {
+pub fn restore(root: &Path) -> Result<Vec<SkippedStep>, AppError> {
     log::info!("Restoring global settings");
     let dir = directory(root)?;
     let _guard = lock(&dir)?;
     let file =
         active(&dir)?.ok_or_else(|| error("NO_BACKUP", "No active global transaction exists"))?;
-    Transaction::open(&file)
-        .map_err(transaction_error)?
-        .restore(&mut Combined::new(WindowsRegistry))
-        .map_err(transaction_error)
+    let mut tx = Transaction::open(&file).map_err(transaction_error)?;
+    tx.restore(&mut Combined::new(WindowsRegistry))
+        .map_err(transaction_error)?;
+    Ok(tx.skipped.clone())
 }
 
 #[cfg(test)]
@@ -434,21 +437,14 @@ mod tests {
             .0
             .write("gameDvr", &Some(raw(5u32.to_reg_value())))
             .unwrap();
-        assert_eq!(
-            tx.restore(&mut executor).unwrap_err().code,
-            "RESTORE_FAILED"
-        );
-        assert_eq!(
-            executor.0.read("gameMode").unwrap(),
-            Some(raw(1u32.to_reg_value()))
-        );
-        executor
-            .0
-            .write("gameDvr", &Some(raw(0u32.to_reg_value())))
-            .unwrap();
         tx.restore(&mut executor).unwrap();
+        assert_eq!(tx.skipped.len(), 1);
+        assert_eq!(tx.skipped[0].step, "gameDvr");
         assert_eq!(executor.0.read("gameMode").unwrap(), Some(original));
-        assert_eq!(executor.0.read("gameDvr").unwrap(), None);
+        assert_eq!(
+            executor.0.read("gameDvr").unwrap(),
+            Some(raw(5u32.to_reg_value()))
+        );
     }
 
     #[test]

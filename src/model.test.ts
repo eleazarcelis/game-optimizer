@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { availableProfileActions, containsPath, defaultGlobalSettings, fileName, initialState, isAppState, isExe, profileChanged } from "./model";
-import { profileName, translate } from "./i18n";
+import { dontShowAgainText, profileName, translate } from "./i18n";
 
 describe("library state", () => {
   it("recognizes duplicate Windows paths case-insensitively", () => {
@@ -56,6 +56,15 @@ describe("library state", () => {
     expect(isAppState({ ...state, libraryNoticeDismissed: "true" })).toBe(false);
     expect(isAppState({ ...state, globalNoticeDismissed: "true" })).toBe(false);
   });
+  it("accepts and validates warning preferences on library entries", () => {
+    const state = initialState();
+    state.executables.push({ path: "C:\\Games\\test.exe", profileId: "game" });
+    expect(isAppState(state)).toBe(true);
+    state.executables[0].suppressedWarnings = ['["launch","packagedPriorityUnavailable"]'];
+    expect(isAppState(JSON.parse(JSON.stringify(state)))).toBe(true);
+    expect(isAppState({ ...state, executables: [{ ...state.executables[0], suppressedWarnings: [1] }] })).toBe(false);
+    expect(isAppState({ ...state, executables: [{ ...state.executables[0], suppressedWarnings: "yes" }] })).toBe(false);
+  });
   it("starts with Defender actions disabled by default", () => {
     expect(initialState().profiles.every((profile) => !profile.defender)).toBe(true);
   });
@@ -83,6 +92,11 @@ describe("library state", () => {
 });
 
 describe("localization", () => {
+  it("uses the entry name literally in the warning preference", () => {
+    expect(dontShowAgainText("es", "Spotify")).toBe("No mostrar de nuevo para Spotify");
+    expect(dontShowAgainText("en", "Spotify")).toBe("Don't show again for Spotify");
+    expect(dontShowAgainText("es", "App $&")).toBe("No mostrar de nuevo para App $&");
+  });
   it("translates built-in profiles and preserves custom profile names", () => {
     const state = initialState();
     expect(profileName(state.profiles[0], "es")).toBe("Juego");

@@ -5,11 +5,13 @@ import type { AppState, Executable, Language, LibrarySort, ProfileActions } from
 import { availableProfileActions, fileName, profileChanged } from "../model";
 import { organizeLibrary, planLibraryMove, type LibraryEntry, type LibraryGroup } from "../library";
 import { profileName, translate as t } from "../i18n";
+import { applyWarningText, skippedText, localizeError, type ApplyWarning, type SkippedStep } from "../errors";
 import { DismissibleNotice } from "./DismissibleNotice";
+import { warningId } from "../entry-warnings";
 
 type OperationProps = { activeOperations: string[]; claimOperation: (path: string) => boolean; releaseOperation: (path: string) => void };
-type Props = OperationProps & { state: AppState; update: (state: AppState) => void; add: () => void; launch: (path: string) => void; launchingPath: string | null; confirmAction: (message: string) => Promise<boolean>; ensureSaved: () => Promise<void>; showError: (error: unknown) => void };
-type GpuStatus = { state: "none" | "applied" | "defaults" | "recovery" | "conflict" | "unverified" | "resetCommit"; detail: string | null; appliedProfile: ProfileActions | null };
+type Props = OperationProps & { state: AppState; update: (state: AppState) => void; add: () => void; launch: (path: string, name: string) => void; launchingPath: string | null; confirmAction: (message: string) => Promise<boolean>; ensureSaved: () => Promise<void>; showError: (error: unknown) => void; showEntryWarning: (path: string, name: string, id: string, message: string) => void; resetEntryWarnings: (path: string) => void; warningSaving: boolean };
+type GpuStatus = { state: "none" | "applied" | "partial" | "defaults" | "recovery" | "conflict" | "unverified" | "resetCommit"; detail: string | null; appliedProfile: ProfileActions | null };
 type DragHandlers = Pick<React.HTMLAttributes<HTMLElement>, "onPointerDown" | "onPointerMove" | "onPointerUp" | "onPointerCancel" | "onLostPointerCapture">;
 function ExecutableIcon({ path, language, launch, disabled }: { path: string; language: Language; launch: () => void; disabled: boolean }) {
   const [icon, setIcon] = useState<string>();
@@ -21,8 +23,9 @@ function ExecutableIcon({ path, language, launch, disabled }: { path: string; la
   }, [path]);
   return <button className="app-icon" disabled={disabled} onClick={launch} title={failed ? `ICON_READ: ${t(language, "iconError")}` : t(language, "launch")} aria-label={`${t(language, "launch")}: ${fileName(path)}`}>{icon ? <img src={icon} alt="" /> : <Gamepad2 size={48} />}</button>;
 }
-function Entry({ item, name, nameFailed, state, remove, favorite, dragHandle, dragHandlers, dropScope, launch, launchingPath, confirmAction, ensureSaved, showError, activeOperations, claimOperation, releaseOperation }: OperationProps & { item: Executable; name?: string; nameFailed: boolean; state: AppState; remove: () => void; favorite: () => void; dragHandle?: React.ReactNode; dragHandlers?: DragHandlers; dropScope?: string; launch: (path: string) => void; launchingPath: string | null; confirmAction: (message: string) => Promise<boolean>; ensureSaved: () => Promise<void>; showError: (error: unknown) => void }) {
+function Entry({ item, name, nameFailed, state, remove, favorite, dragHandle, dragHandlers, dropScope, launch, launchingPath, confirmAction, ensureSaved, showError, showEntryWarning, resetEntryWarnings, warningSaving, activeOperations, claimOperation, releaseOperation }: OperationProps & { item: Executable; name?: string; nameFailed: boolean; state: AppState; remove: () => void; favorite: () => void; dragHandle?: React.ReactNode; dragHandlers?: DragHandlers; dropScope?: string; launch: Props["launch"]; launchingPath: string | null; confirmAction: (message: string) => Promise<boolean>; ensureSaved: () => Promise<void>; showError: (error: unknown) => void; showEntryWarning: Props["showEntryWarning"]; resetEntryWarnings: Props["resetEntryWarnings"]; warningSaving: boolean }) {
   const lang = state.language;
+  const entryName = name ?? fileName(item.path);
   const profile = state.profiles.find((p) => p.id === item.profileId);
   const [status, setStatus] = useState<GpuStatus>();
   const busy = activeOperations.includes(item.path.toLowerCase());
@@ -61,6 +64,8 @@ function Entry({ item, name, nameFailed, state, remove, favorite, dragHandle, dr
   const plan = availableProfileActions(profile);
   const resetPlan = profile && { actions: { cpu: profile.cpu, gpu: profile.gpu, defender: false } };
   async function perform(action: "apply" | "restore" | "reset" | "reapply") {
+    const warnSkipped = (skipped: SkippedStep[]) => { skipped.forEach((step) => showEntryWarning(item.path, entryName, warningId("restore", step.step, step.message, step.retryable), skippedText(lang, [step]))); };
+    const warnApply = (warnings: ApplyWarning[]) => { warnings.forEach((step) => showEntryWarning(item.path, entryName, warningId("apply", step.step, step.message, step.recovery_required), applyWarningText(lang, step))); };
     let claimed = false;
     let restoredForReapply = false;
     try {
@@ -74,18 +79,21 @@ function Entry({ item, name, nameFailed, state, remove, favorite, dragHandle, dr
       await ensureSaved();
       if (action === "reapply") {
         if (!selectedPlan) throw new Error(t(lang, "profileUnsupported"));
-        await invoke("restore_profile", { path: item.path });
+        const skipped = await invoke<SkippedStep[]>("restore_profile", { path: item.path });
+        warnSkipped(skipped);
+        if (skipped.length) return;
         restoredForReapply = true;
-        await invoke("apply_profile", { path: item.path, profile: selectedPlan.actions });
+        warnApply(await invoke<ApplyWarning[]>("apply_profile", { path: item.path, profile: selectedPlan.actions }));
       } else if (action !== "restore") {
         if (!selectedPlan) throw new Error(t(lang, "profileUnsupported"));
-        await invoke(action === "apply" ? "apply_profile" : "reset_profile", { path: item.path, profile: selectedPlan.actions });
+        if (action === "apply") warnApply(await invoke<ApplyWarning[]>("apply_profile", { path: item.path, profile: selectedPlan.actions }));
+        else await invoke("reset_profile", { path: item.path, profile: selectedPlan.actions });
       } else {
-        await invoke("restore_profile", { path: item.path });
+        warnSkipped(await invoke<SkippedStep[]>("restore_profile", { path: item.path }));
       }
     } catch (error) {
       if (restoredForReapply) {
-        const detail = error && typeof error === "object" && "message" in error ? String(error.message) : String(error);
+        const detail = error && typeof error === "object" && "code" in error ? localizeError(lang, String(error.code), String((error as { message?: unknown }).message ?? "")) : String(error && typeof error === "object" && "message" in error ? error.message : error);
         showError({ code: "REAPPLY_FAILED", message: `${t(lang, "reapplyFailed")} ${detail}` });
       } else showError(error);
     } finally {
@@ -104,7 +112,7 @@ function Entry({ item, name, nameFailed, state, remove, favorite, dragHandle, dr
     }
   }
   const statusLabel = statusFailed ? t(lang, statusErrorDismissed ? "notOptimized" : "statusError") : !status ? t(lang, "loading")
-    : t(lang, status.state === "none" ? "gpuNone" : status.state === "applied" ? "gpuApplied" : status.state === "defaults" ? "defaultsApplied" : status.state === "conflict" ? "gpuConflict" : status.state === "unverified" ? "defenderStatusUnverified" : status.state === "resetCommit" ? "resetCommitStatus" : "gpuRecovery");
+    : t(lang, status.state === "none" ? "gpuNone" : status.state === "applied" ? "gpuApplied" : status.state === "partial" ? "gpuPartial" : status.state === "defaults" ? "defaultsApplied" : status.state === "conflict" ? "gpuConflict" : status.state === "unverified" ? "defenderStatusUnverified" : status.state === "resetCommit" ? "resetCommitStatus" : "gpuRecovery");
   const canReset = status && ["none", "applied", "defaults"].includes(status.state);
   const canCompare = status && (status.state === "applied" || status.state === "unverified");
   const needsReapply = !!(canCompare && status.appliedProfile && profileChanged(profile, status.appliedProfile));
@@ -130,15 +138,16 @@ function Entry({ item, name, nameFailed, state, remove, favorite, dragHandle, dr
   }
   return <article className={`entry${dragHandlers ? " entry-draggable" : ""}`} {...dragHandlers} data-drop-scope={dropScope} data-drop-path={item.path} data-drop-favorite={!!item.favorite}>
     <div className="entry-header">
-      <ExecutableIcon path={item.path} language={lang} launch={() => launch(item.path)} disabled={launchDisabled} />
+      <ExecutableIcon path={item.path} language={lang} launch={() => launch(item.path, entryName)} disabled={launchDisabled} />
       <div className="entry-content">
         <div className="entry-name">
-          <h3 title={nameFailed ? `NAME_READ: ${t(lang, "nameError")}` : name ?? fileName(item.path)}>{name ?? fileName(item.path)}</h3>
-          <button className="icon-button entry-launch" disabled={launchDisabled} title={launchDisabled ? t(lang, "launchBusy") : t(lang, "launch")} aria-label={t(lang, "launch")} onClick={() => launch(item.path)}>{launchingPath === item.path ? <LoaderCircle className="spin" size={16}/> : <Play size={16}/>}</button>
+          <h3 title={nameFailed ? `NAME_READ: ${t(lang, "nameError")}` : entryName}>{entryName}</h3>
+          <button className="icon-button entry-launch" disabled={launchDisabled} title={launchDisabled ? t(lang, "launchBusy") : t(lang, "launch")} aria-label={t(lang, "launch")} onClick={() => launch(item.path, entryName)}>{launchingPath === item.path ? <LoaderCircle className="spin" size={16}/> : <Play size={16}/>}</button>
           <div className="entry-menu" ref={menu} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setMenuOpen(false); }}>
             <button ref={menuButton} className="icon-button" title={t(lang, "moreActions")} aria-label={t(lang, "moreActions")} aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}><MoreVertical size={18}/></button>
             {menuOpen && <div className="entry-menu-panel">
               <button onClick={() => { setMenuOpen(false); void invoke("open_executable_folder", { path: item.path }).catch(showError); }}><FolderOpen size={16}/>{t(lang, "openFolder")}</button>
+              {!!item.suppressedWarnings?.length && <button disabled={warningSaving} onClick={() => { setMenuOpen(false); resetEntryWarnings(item.path); }}><RotateCcw size={16}/>{t(lang, "restoreEntryWarnings")}</button>}
               <button className="entry-menu-danger" disabled={busy || launchingPath !== null || status?.state !== "none"} title={status?.state === "none" ? t(lang, "remove") : t(lang, "removeBlocked")} onClick={() => void confirmRemove()}><Trash2 size={16}/>{t(lang, "remove")}</button>
             </div>}
           </div>
@@ -148,6 +157,7 @@ function Entry({ item, name, nameFailed, state, remove, favorite, dragHandle, dr
     </div>
     <div className="entry-meta"><button className={`icon-button entry-favorite${item.favorite ? " selected" : ""}`} title={t(lang, item.favorite ? "removeFavorite" : "addFavorite")} aria-label={`${t(lang, item.favorite ? "removeFavorite" : "addFavorite")}: ${name ?? fileName(item.path)}`} aria-pressed={!!item.favorite} onClick={favorite}><Star size={16} fill={item.favorite ? "currentColor" : "none"}/></button><span className="profile-tag">{profile ? profileName(profile, lang) : t(lang, "noProfile")}</span><span className="status" title={status?.detail ?? undefined}><i />{busy ? <><LoaderCircle className="spin" size={12}/>{t(lang, "working")}</> : statusLabel}</span>{statusFailed && !statusErrorDismissed && <button className="icon-button status-dismiss" title={t(lang, "dismissStatusError")} aria-label={t(lang, "dismissStatusError")} onClick={() => setStatusErrorDismissed(true)}><X size={14}/></button>}</div>
     {!busy && status?.state === "unverified" && status.detail && <p className="profile-change" role="status">{status.detail}</p>}
+    {!busy && status?.state === "partial" && <p className="profile-change" role="status">{t(lang, "gpuPartialDetail")}</p>}
     {!busy && canCompare && (needsReapply || !status.appliedProfile) && <p className="profile-change" role="status">{t(lang, needsReapply ? plan ? "profileChanged" : "profileChangedNoActions" : "profileComparisonUnavailable")}</p>}
     {dragHandle}
     {needsReapply && <div className="entry-actions reapply-actions"><button className="entry-optimize" disabled={busy || launchingPath !== null || !plan} title={!plan ? t(lang, "reapplyNoActions") : undefined} onClick={() => void perform("reapply")}><Zap size={14} aria-hidden="true"/>{t(lang, "reapply")}</button></div>}
@@ -159,7 +169,7 @@ function Entry({ item, name, nameFailed, state, remove, favorite, dragHandle, dr
     </div>
   </article>;
 }
-export function Library({ state, update, confirmAction, add, launch, launchingPath, ensureSaved, showError, activeOperations, claimOperation, releaseOperation }: Props) {
+export function Library({ state, update, confirmAction, add, launch, launchingPath, ensureSaved, showError, showEntryWarning, resetEntryWarnings, warningSaving, activeOperations, claimOperation, releaseOperation }: Props) {
   const lang: Language = state.language;
   const sort = state.librarySort ?? "manual";
   const [names, setNames] = useState<Record<string, { name?: string; failed: boolean }>>({});
@@ -301,7 +311,7 @@ export function Library({ state, update, confirmAction, add, launch, launchingPa
     const { item } = entry;
     const scope = grouped ? `group:${group.key}` : "groups";
     const peers = grouped ? group.entries.map(({ item: member }) => ({ paths: [member.path], favorite: !!member.favorite })) : groupPeers;
-    return <Entry key={item.path} item={item} name={names[item.path]?.name} nameFailed={!!names[item.path]?.failed} state={state} launch={launch} launchingPath={launchingPath} confirmAction={confirmAction} ensureSaved={ensureSaved} showError={showError} activeOperations={activeOperations} claimOperation={claimOperation} releaseOperation={releaseOperation}
+    return <Entry key={item.path} item={item} name={names[item.path]?.name} nameFailed={!!names[item.path]?.failed} state={state} launch={launch} launchingPath={launchingPath} confirmAction={confirmAction} ensureSaved={ensureSaved} showError={showError} showEntryWarning={showEntryWarning} resetEntryWarnings={resetEntryWarnings} warningSaving={warningSaving} activeOperations={activeOperations} claimOperation={claimOperation} releaseOperation={releaseOperation}
       favorite={() => update({ ...state, executables: state.executables.map((member) => member.path === item.path ? { ...member, favorite: !member.favorite } : member) })}
       remove={() => update({ ...state, executables: state.executables.filter((member) => member.path !== item.path) })}
       dragHandle={sort === "manual" ? handle([item.path], scope, !!item.favorite, peers, t(lang, "dragItem"), entry.name) : undefined}

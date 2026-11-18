@@ -79,9 +79,40 @@ fn failure(
     }
 }
 
+/// Marker present in executor errors when a value was modified outside the app.
+pub const EXTERNAL_CHANGE: &str = "changed externally";
+
+fn external_change(message: &str) -> bool {
+    message.contains(EXTERNAL_CHANGE) || message.contains("modified externally")
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SkippedStep {
+    pub step: String,
+    pub message: String,
+    pub retryable: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ApplyWarning {
+    pub step: String,
+    pub message: String,
+    pub recovery_required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder_conflict: Option<FolderConflict>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FolderConflict {
+    pub target: String,
+    pub folders: Vec<String>,
+    pub unidentified: bool,
+}
+
 pub struct Transaction {
     path: PathBuf,
     pub journal: Journal,
+    pub skipped: Vec<SkippedStep>,
     _lock: fs::File,
 }
 
@@ -144,6 +175,7 @@ impl Transaction {
         Ok(Self {
             path: path.to_owned(),
             journal,
+            skipped: Vec::new(),
             _lock: lock,
         })
     }
@@ -161,10 +193,12 @@ impl Transaction {
             || journal.steps.iter().any(|s| {
                 s.id.is_empty()
                     || !s.action.is_object()
-                    || (matches!(
-                        s.status,
-                        StepStatus::Planned | StepStatus::Skipped | StepStatus::Discarded
-                    ) && s.before.is_some())
+                    || (matches!(s.status, StepStatus::Planned | StepStatus::Discarded)
+                        && s.before.is_some())
+                    || (s.status == StepStatus::Skipped
+                        && s.before.as_ref().is_some_and(|before| {
+                            before.is_null() || !s.error.as_deref().is_some_and(external_change)
+                        }))
                     || (!matches!(
                         s.status,
                         StepStatus::Planned | StepStatus::Skipped | StepStatus::Discarded
@@ -197,6 +231,7 @@ impl Transaction {
         Ok(Self {
             path: path.to_owned(),
             journal,
+            skipped: Vec::new(),
             _lock: lock,
         })
     }
@@ -287,6 +322,9 @@ impl Transaction {
             ));
         }
         self.restore(executor)?;
+        if !self.skipped.is_empty() {
+            return Ok(());
+        }
         let previous = self
             .journal
             .reset
@@ -342,6 +380,28 @@ impl Transaction {
     }
 
     pub fn apply(&mut self, executor: &mut impl StepExecutor) -> Result<(), TransactionError> {
+        self.apply_inner(executor, false).map(|_| ())
+    }
+
+    pub fn apply_best_effort(
+        &mut self,
+        executor: &mut impl StepExecutor,
+    ) -> Result<Vec<ApplyWarning>, TransactionError> {
+        if self.journal.reset.is_some() {
+            return Err(failure(
+                "RESET_INVALID",
+                None,
+                "Best-effort apply cannot reset a profile",
+            ));
+        }
+        self.apply_inner(executor, true)
+    }
+
+    fn apply_inner(
+        &mut self,
+        executor: &mut impl StepExecutor,
+        best_effort: bool,
+    ) -> Result<Vec<ApplyWarning>, TransactionError> {
         log::info!("Applying transaction");
         if self
             .journal
@@ -355,11 +415,25 @@ impl Transaction {
                 "Restore the existing transaction before applying again",
             ));
         }
+        let mut warnings = Vec::new();
         for index in 0..self.journal.steps.len() {
             let id = self.journal.steps[index].id.clone();
             let before = match executor.snapshot(&self.journal.steps[index]) {
                 Ok(value) if !value.is_null() => value,
                 Ok(_) => {
+                    if best_effort {
+                        let message = "Snapshot cannot be null".to_string();
+                        self.journal.steps[index].status = StepStatus::Skipped;
+                        self.journal.steps[index].error = Some(message.clone());
+                        self.save()?;
+                        warnings.push(ApplyWarning {
+                            step: id,
+                            message,
+                            recovery_required: false,
+                            folder_conflict: None,
+                        });
+                        continue;
+                    }
                     self.journal.steps[index].error = Some("Snapshot cannot be null".into());
                     self.save()?;
                     return Err(failure(
@@ -369,6 +443,19 @@ impl Transaction {
                     ));
                 }
                 Err(message) => {
+                    if best_effort {
+                        log::warn!("Skipping snapshot of {id}: {message}");
+                        self.journal.steps[index].status = StepStatus::Skipped;
+                        self.journal.steps[index].error = Some(message.clone());
+                        self.save()?;
+                        warnings.push(ApplyWarning {
+                            step: id,
+                            message,
+                            recovery_required: false,
+                            folder_conflict: None,
+                        });
+                        continue;
+                    }
                     self.journal.steps[index].error = Some(message.clone());
                     self.save()?;
                     return Err(failure("SNAPSHOT_FAILED", Some(&id), message));
@@ -381,16 +468,66 @@ impl Transaction {
             if let Err(message) = executor.apply(&self.journal.steps[index]) {
                 self.journal.steps[index].error = Some(message.clone());
                 self.save()?;
+                if best_effort {
+                    log::warn!("Skipping application of {id}: {message}");
+                    // This conflict is returned by the coordinator before it reserves or writes anything.
+                    let no_write = self.journal.steps[index]
+                        .action
+                        .get("coordinated")
+                        .and_then(Value::as_bool)
+                        == Some(true)
+                        && ((id == "defender-path"
+                            && message == crate::defender_coordination::OVERLAP)
+                            || (id == "defender-process"
+                                && message == crate::defender_coordination::PROCESS_OVERLAP));
+                    let recovery = if no_write {
+                        Ok(())
+                    } else {
+                        self.journal.steps[index].status = StepStatus::Restoring;
+                        self.save()?;
+                        let before = self.journal.steps[index]
+                            .before
+                            .clone()
+                            .expect("prepared step has a snapshot");
+                        executor.restore(&self.journal.steps[index], &before)
+                    };
+                    let recovery_required = recovery.is_err();
+                    match recovery {
+                        Ok(()) => {
+                            self.journal.steps[index].status = StepStatus::Skipped;
+                            self.journal.steps[index].before = None;
+                        }
+                        Err(ref recovery_error) => {
+                            log::warn!("Recovery of {id} failed: {recovery_error}");
+                            self.journal.steps[index].error = Some(recovery_error.clone());
+                        }
+                    }
+                    self.save()?;
+                    let message = match recovery {
+                        Ok(()) => message,
+                        Err(recovery_error) => {
+                            format!("{message}; recovery required: {recovery_error}")
+                        }
+                    };
+                    warnings.push(ApplyWarning {
+                        step: id,
+                        message,
+                        recovery_required,
+                        folder_conflict: None,
+                    });
+                    continue;
+                }
                 return Err(failure("APPLY_FAILED", Some(&id), message));
             }
             self.journal.steps[index].status = StepStatus::Applied;
             self.save()?;
         }
-        Ok(())
+        Ok(warnings)
     }
 
     pub fn restore(&mut self, executor: &mut impl StepExecutor) -> Result<(), TransactionError> {
         log::info!("Restoring transaction");
+        self.skipped.clear();
         for index in (0..self.journal.steps.len()).rev() {
             let step = &self.journal.steps[index];
             if step.status == StepStatus::Planned {
@@ -398,10 +535,10 @@ impl Transaction {
                 self.save()?;
                 continue;
             }
-            if matches!(
-                step.status,
-                StepStatus::Restored | StepStatus::Skipped | StepStatus::Discarded
-            ) {
+            if matches!(step.status, StepStatus::Restored | StepStatus::Discarded)
+                || (step.status == StepStatus::Skipped
+                    && (self.journal.reset.is_none() || step.before.is_none()))
+            {
                 continue;
             }
             let id = step.id.clone();
@@ -409,12 +546,42 @@ impl Transaction {
                 .before
                 .clone()
                 .ok_or_else(|| failure("JOURNAL_INVALID", Some(&id), "Missing snapshot"))?;
+            if id == "defender-path"
+                && step.action.get("coordinated").and_then(Value::as_bool) == Some(true)
+                && step.action.get("independent").and_then(Value::as_bool) != Some(true)
+                && self
+                    .skipped
+                    .iter()
+                    .any(|failed| failed.step == "defender-process" && failed.retryable)
+            {
+                let message = "Defender process restoration is pending".to_string();
+                log::warn!("Deferring restore of {id}: {message}");
+                self.journal.steps[index].status = StepStatus::Restoring;
+                self.journal.steps[index].error = Some(message.clone());
+                self.save()?;
+                self.skipped.push(SkippedStep {
+                    step: id,
+                    message,
+                    retryable: true,
+                });
+                continue;
+            }
             self.journal.steps[index].status = StepStatus::Restoring;
             self.save()?;
             if let Err(message) = executor.restore(&self.journal.steps[index], &before) {
                 self.journal.steps[index].error = Some(message.clone());
+                let retryable = self.journal.reset.is_some() || !external_change(&message);
+                log::warn!("Skipping restore of {id}: {message}");
+                if !retryable {
+                    self.journal.steps[index].status = StepStatus::Skipped;
+                }
                 self.save()?;
-                return Err(failure("RESTORE_FAILED", Some(&id), message));
+                self.skipped.push(SkippedStep {
+                    step: id,
+                    message,
+                    retryable,
+                });
+                continue;
             }
             self.journal.steps[index].error = None;
             self.journal.steps[index].status = StepStatus::Restored;
@@ -435,6 +602,7 @@ mod tests {
         values: BTreeMap<String, i32>,
         fail_apply: Option<String>,
         fail_restore: Option<String>,
+        conflict_restore: Option<String>,
         null_snapshot: Option<String>,
         order: Vec<String>,
     }
@@ -456,6 +624,9 @@ mod tests {
         fn restore(&mut self, step: &Step, before: &Value) -> Result<(), String> {
             let id = step.id.as_str();
             self.order.push(id.into());
+            if self.conflict_restore.as_deref() == Some(id) {
+                return Err("setting changed externally".into());
+            }
             if self.fail_restore.as_deref() == Some(id) {
                 return Err("restore failed".into());
             }
@@ -478,6 +649,108 @@ mod tests {
                 action: json!({"target": id}),
             })
             .collect()
+    }
+
+    #[test]
+    fn profile_apply_continues_with_process_after_folder_overlap() {
+        struct Overlap {
+            calls: Vec<String>,
+        }
+        impl StepExecutor for Overlap {
+            fn snapshot(&mut self, step: &Step) -> Result<Value, String> {
+                self.calls.push(format!("snapshot:{}", step.id));
+                Ok(json!({"value": 1}))
+            }
+            fn apply(&mut self, step: &Step) -> Result<(), String> {
+                self.calls.push(format!("apply:{}", step.id));
+                if step.id == "defender-path" {
+                    Err("Defender exclusion overlaps another active profile".into())
+                } else {
+                    Ok(())
+                }
+            }
+            fn restore(&mut self, step: &Step, _: &Value) -> Result<(), String> {
+                self.calls.push(format!("restore:{}", step.id));
+                Ok(())
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("journal.json");
+        let requests: Vec<_> = ["defender-path", "defender-process", "gpu"]
+            .iter()
+            .map(|id| StepRequest {
+                id: (*id).into(),
+                action: json!({"coordinated":true}),
+            })
+            .collect();
+        let mut tx = Transaction::create(&file, &requests).unwrap();
+        let mut executor = Overlap { calls: Vec::new() };
+        let warnings = tx.apply_best_effort(&mut executor).unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(tx.journal.steps[0].status, StepStatus::Skipped);
+        assert_eq!(tx.journal.steps[1].status, StepStatus::Applied);
+        assert_eq!(tx.journal.steps[2].status, StepStatus::Applied);
+        assert!(
+            executor
+                .calls
+                .iter()
+                .any(|call| call == "apply:defender-process")
+        );
+        drop(tx);
+        let mut tx = Transaction::open(&file).unwrap();
+        tx.restore(&mut executor).unwrap();
+        assert_eq!(
+            executor
+                .calls
+                .iter()
+                .filter(|call| call.starts_with("restore:"))
+                .collect::<Vec<_>>(),
+            vec!["restore:gpu", "restore:defender-process"]
+        );
+    }
+
+    #[test]
+    fn profile_apply_recovers_partial_writes_and_retains_failed_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("journal.json");
+        let mut tx = Transaction::create(&file, &ids()).unwrap();
+        let mut executor = fake();
+        executor.fail_apply = Some("b".into());
+        executor.fail_restore = Some("b".into());
+        let warnings = tx.apply_best_effort(&mut executor).unwrap();
+        assert!(warnings[0].recovery_required);
+        assert_eq!(tx.journal.steps[1].status, StepStatus::Restoring);
+        assert_eq!(executor.values["c"], 13);
+        drop(tx);
+        let mut tx = Transaction::open(&file).unwrap();
+        executor.fail_restore = None;
+        tx.restore(&mut executor).unwrap();
+        assert_eq!(executor.values, fake().values);
+
+        let file = dir.path().join("recovered.json");
+        let mut tx = Transaction::create(&file, &ids()).unwrap();
+        let mut executor = fake();
+        executor.fail_apply = Some("b".into());
+        let warnings = tx.apply_best_effort(&mut executor).unwrap();
+        assert!(!warnings[0].recovery_required);
+        assert_eq!(tx.journal.steps[1].status, StepStatus::Skipped);
+        assert_eq!(executor.values["b"], 2);
+        executor.order.clear();
+        tx.restore(&mut executor).unwrap();
+        assert_eq!(executor.order, vec!["c", "a"]);
+    }
+
+    #[test]
+    fn profile_apply_skips_failed_snapshot_and_continues() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut tx = Transaction::create(&dir.path().join("journal.json"), &ids()).unwrap();
+        let mut executor = fake();
+        executor.null_snapshot = Some("b".into());
+        let warnings = tx.apply_best_effort(&mut executor).unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(tx.journal.steps[1].status, StepStatus::Skipped);
+        assert_eq!(executor.values["b"], 2);
+        assert_eq!(executor.values["c"], 13);
     }
 
     #[test]
@@ -519,10 +792,11 @@ mod tests {
         let mut executor = fake();
         tx.apply(&mut executor).unwrap();
         executor.fail_restore = Some("b".into());
-        assert_eq!(
-            tx.restore(&mut executor).unwrap_err().code,
-            "RESTORE_FAILED"
-        );
+        tx.restore(&mut executor).unwrap();
+        assert_eq!(tx.skipped.len(), 1);
+        assert!(tx.skipped[0].retryable);
+        assert_eq!(executor.order, vec!["c", "b", "a"]);
+        assert_eq!(executor.values["a"], 1);
         drop(tx);
         let mut reopened = Transaction::open(&path).unwrap();
         assert_eq!(reopened.journal.steps[2].status, StepStatus::Restored);
@@ -534,6 +808,166 @@ mod tests {
         executor.fail_restore = None;
         reopened.restore(&mut executor).unwrap();
         assert_eq!(executor.values, fake().values);
+    }
+
+    #[test]
+    fn skipped_conflict_journal_reopens_and_remaining_steps_can_be_recovered() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("journal.json");
+        let mut tx = Transaction::create(&path, &ids()).unwrap();
+        let mut executor = fake();
+        tx.apply(&mut executor).unwrap();
+        executor.conflict_restore = Some("c".into());
+        executor.fail_restore = Some("b".into());
+        tx.restore(&mut executor).unwrap();
+        assert_eq!(tx.skipped.len(), 2);
+        assert!(!tx.skipped[0].retryable);
+        assert!(tx.skipped[1].retryable);
+        assert_eq!(tx.journal.steps[2].status, StepStatus::Skipped);
+        assert_eq!(tx.journal.steps[2].before, Some(json!({"value": 3})));
+        drop(tx);
+
+        let mut reopened = Transaction::open(&path).unwrap();
+        executor.fail_restore = None;
+        reopened.restore(&mut executor).unwrap();
+        assert_eq!(executor.values["a"], 1);
+        assert_eq!(executor.values["b"], 2);
+        assert_eq!(executor.values["c"], 13);
+        drop(reopened);
+        let reopened = Transaction::open(&path).unwrap();
+        assert_eq!(reopened.journal.steps[2].status, StepStatus::Skipped);
+        assert_eq!(reopened.journal.steps[2].before, Some(json!({"value": 3})));
+    }
+
+    #[test]
+    fn skipped_snapshot_requires_recorded_external_conflict() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("journal.json");
+        let mut tx = Transaction::create(&path, &ids()).unwrap();
+        tx.journal.steps[0].status = StepStatus::Skipped;
+        tx.journal.steps[0].before = Some(json!({"value": 1}));
+        tx.save().unwrap();
+        drop(tx);
+        assert_eq!(
+            Transaction::open(&path).err().unwrap().code,
+            "JOURNAL_INVALID"
+        );
+    }
+
+    #[test]
+    fn modified_externally_is_skipped_and_other_steps_restore() {
+        struct Conflict;
+        impl StepExecutor for Conflict {
+            fn snapshot(&mut self, _: &Step) -> Result<Value, String> {
+                Ok(json!({"value": 1}))
+            }
+            fn apply(&mut self, _: &Step) -> Result<(), String> {
+                Ok(())
+            }
+            fn restore(&mut self, step: &Step, _: &Value) -> Result<(), String> {
+                if step.id == "b" {
+                    Err("GPU preference was modified externally; refusing to overwrite it".into())
+                } else {
+                    Ok(())
+                }
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("journal.json");
+        let mut tx = Transaction::create(&path, &ids()).unwrap();
+        tx.apply(&mut Conflict).unwrap();
+        tx.restore(&mut Conflict).unwrap();
+        assert_eq!(tx.skipped.len(), 1);
+        assert!(!tx.skipped[0].retryable);
+        assert_eq!(tx.journal.steps[0].status, StepStatus::Restored);
+        assert_eq!(tx.journal.steps[1].status, StepStatus::Skipped);
+        assert_eq!(tx.journal.steps[2].status, StepStatus::Restored);
+        drop(tx);
+        assert!(Transaction::open(&path).is_ok());
+    }
+
+    #[test]
+    fn interrupted_reset_keeps_previous_backup_until_all_steps_recover() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("journal.json");
+        let mut executor = fake();
+        let mut tx = Transaction::create(&path, &ids()).unwrap();
+        tx.apply(&mut executor).unwrap();
+        tx.begin_reset(&ids(), true).unwrap();
+        tx.apply(&mut executor).unwrap();
+        executor.fail_restore = Some("b".into());
+        tx.rollback_reset(&mut executor).unwrap();
+        assert_eq!(tx.skipped.len(), 1);
+        assert!(tx.journal.reset.is_some());
+        assert_eq!(tx.journal.steps[0].status, StepStatus::Restored);
+        drop(tx);
+        let mut reopened = Transaction::open(&path).unwrap();
+        executor.fail_restore = None;
+        reopened.rollback_reset(&mut executor).unwrap();
+        assert!(reopened.journal.reset.is_none());
+        assert_eq!(executor.values["a"], 11);
+        assert_eq!(executor.values["b"], 12);
+        assert_eq!(executor.values["c"], 13);
+    }
+
+    #[test]
+    fn coordinated_defender_directory_waits_for_failed_process_restore() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("journal.json");
+        let requests = ["a", "defender-path", "defender-process"]
+            .into_iter()
+            .map(|id| StepRequest {
+                id: id.into(),
+                action: json!({"coordinated": id.starts_with("defender-")}),
+            })
+            .collect::<Vec<_>>();
+        let mut executor = Fake {
+            values: [
+                ("a".into(), 1),
+                ("defender-path".into(), 2),
+                ("defender-process".into(), 3),
+            ]
+            .into(),
+            ..Fake::default()
+        };
+        let mut tx = Transaction::create(&path, &requests).unwrap();
+        tx.apply(&mut executor).unwrap();
+        executor.fail_restore = Some("defender-process".into());
+        tx.restore(&mut executor).unwrap();
+        assert_eq!(executor.order, vec!["defender-process", "a"]);
+        assert_eq!(tx.skipped.len(), 2);
+        assert_eq!(tx.journal.steps[1].status, StepStatus::Restoring);
+        drop(tx);
+        let mut tx = Transaction::open(&path).unwrap();
+        executor.fail_restore = None;
+        executor.order.clear();
+        tx.restore(&mut executor).unwrap();
+        assert_eq!(executor.order, vec!["defender-process", "defender-path"]);
+        assert!(tx.skipped.is_empty());
+    }
+
+    #[test]
+    fn independent_defender_folder_restores_when_process_restore_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let requests: Vec<_> = ["defender-path", "defender-process"]
+            .into_iter()
+            .map(|id| StepRequest {
+                id: id.into(),
+                action: json!({"coordinated":true,"independent":true}),
+            })
+            .collect();
+        let mut executor = Fake {
+            values: [("defender-path".into(), 1), ("defender-process".into(), 2)].into(),
+            ..Fake::default()
+        };
+        let mut tx = Transaction::create(&dir.path().join("journal.json"), &requests).unwrap();
+        tx.apply(&mut executor).unwrap();
+        executor.fail_restore = Some("defender-process".into());
+        tx.restore(&mut executor).unwrap();
+        assert_eq!(executor.order, vec!["defender-process", "defender-path"]);
+        assert_eq!(tx.skipped.len(), 1);
+        assert_eq!(tx.journal.steps[0].status, StepStatus::Restored);
+        assert_eq!(tx.journal.steps[1].status, StepStatus::Restoring);
     }
 
     #[test]

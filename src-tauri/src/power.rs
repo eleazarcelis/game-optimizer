@@ -171,6 +171,7 @@ impl<P: Power> StepExecutor for Executor<P> {
             return Err("Power reservation is missing or belongs to another transaction".into());
         }
         if current != action.scheme {
+            let _ = machine_resource::release(&self.reservation, &expected);
             return Err("Power plan changed externally; refusing to overwrite it".into());
         }
         self.power.write(before.scheme)?;
@@ -215,13 +216,8 @@ mod tests {
         assert!(executor.matches_applied(&tx.journal.steps[0]).unwrap());
         assert!(machine_resource::claim(&executor.reservation, "other").is_err());
         executor.power.0 = Uuid::new_v4();
-        assert_eq!(
-            tx.restore(&mut executor).unwrap_err().code,
-            "RESTORE_FAILED"
-        );
-        executor.power.0 = Uuid::parse_str(HIGH).unwrap();
         tx.restore(&mut executor).unwrap();
-        assert_eq!(executor.power.0, plan);
+        assert_eq!(tx.skipped.len(), 1);
         assert_eq!(
             machine_resource::owner(&executor.reservation).unwrap(),
             None

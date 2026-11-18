@@ -1,3 +1,4 @@
+use crate::cpu::CpuPriority;
 use std::{
     ffi::OsStr,
     mem::{size_of, zeroed},
@@ -9,18 +10,26 @@ use std::{
     ptr::{null, null_mut},
 };
 use windows_sys::Win32::{
-    Foundation::HANDLE,
+    Foundation::{ERROR_NOT_ALL_ASSIGNED, GetLastError, HANDLE, SetLastError},
     Security::{
-        EqualSid, GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation,
-        TOKEN_ELEVATION, TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TOKEN_USER, TokenElevation,
+        AdjustTokenPrivileges, EqualSid, GetSidSubAuthority, GetSidSubAuthorityCount,
+        GetTokenInformation, ImpersonateSelf, LookupPrivilegeValueW, RevertToSelf,
+        SE_PRIVILEGE_ENABLED, SecurityImpersonation, TOKEN_ADJUST_PRIVILEGES, TOKEN_ELEVATION,
+        TOKEN_MANDATORY_LABEL, TOKEN_PRIVILEGES, TOKEN_QUERY, TOKEN_USER, TokenElevation,
         TokenIntegrityLevel, TokenSessionId, TokenUser,
     },
     System::{
         Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock},
+        JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_PRIORITY_CLASS,
+            JOBOBJECT_BASIC_LIMIT_INFORMATION, JobObjectBasicLimitInformation,
+            SetInformationJobObject,
+        },
         Threading::{
             CREATE_NEW_CONSOLE, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
             DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
-            InitializeProcThreadAttributeList, OpenProcess, OpenProcessToken,
+            GetCurrentThread, GetPriorityClass, HIGH_PRIORITY_CLASS, IDLE_PRIORITY_CLASS,
+            InitializeProcThreadAttributeList, OpenProcess, OpenProcessToken, OpenThreadToken,
             PROC_THREAD_ATTRIBUTE_PARENT_PROCESS, PROCESS_CREATE_PROCESS, PROCESS_INFORMATION,
             PROCESS_QUERY_LIMITED_INFORMATION, ResumeThread, STARTUPINFOEXW, TerminateProcess,
             UpdateProcThreadAttribute,
@@ -138,16 +147,184 @@ impl Drop for Environment {
     }
 }
 
-pub fn launch(path: &Path, directory: &Path) -> Result<(), String> {
+fn priority_job(priority: CpuPriority) -> Result<OwnedHandle, String> {
+    std::thread::spawn(move || {
+        if unsafe { ImpersonateSelf(SecurityImpersonation) } == 0 {
+            return Err(last_error(
+                "Cannot impersonate current user for priority job",
+            ));
+        }
+        let result = enable_priority_privilege().and_then(|()| create_priority_job(priority));
+        if unsafe { RevertToSelf() } == 0 {
+            return Err(last_error("Cannot release priority privilege"));
+        }
+        result
+    })
+    .join()
+    .map_err(|_| "Priority job setup thread panicked".to_string())?
+}
+
+fn enable_priority_privilege() -> Result<(), String> {
+    let mut raw = null_mut();
+    if unsafe {
+        OpenThreadToken(
+            GetCurrentThread(),
+            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+            1,
+            &mut raw,
+        )
+    } == 0
+    {
+        return Err(last_error("Cannot open priority privilege token"));
+    }
+    let token = unsafe { OwnedHandle::from_raw_handle(raw) };
+    let mut privileges = TOKEN_PRIVILEGES::default();
+    privileges.PrivilegeCount = 1;
+    let name: Vec<u16> = "SeIncreaseBasePriorityPrivilege\0".encode_utf16().collect();
+    if unsafe { LookupPrivilegeValueW(null(), name.as_ptr(), &mut privileges.Privileges[0].Luid) }
+        == 0
+    {
+        return Err(last_error("Cannot look up priority privilege"));
+    }
+    privileges.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    unsafe { SetLastError(0) };
+    if unsafe {
+        AdjustTokenPrivileges(
+            token.as_raw_handle(),
+            0,
+            &privileges,
+            0,
+            null_mut(),
+            null_mut(),
+        )
+    } == 0
+    {
+        return Err(last_error("Cannot enable priority privilege"));
+    }
+    if unsafe { GetLastError() } == ERROR_NOT_ALL_ASSIGNED {
+        return Err("Priority privilege is not available in the current token".into());
+    }
+    Ok(())
+}
+
+fn create_priority_job(priority: CpuPriority) -> Result<OwnedHandle, String> {
+    let handle = unsafe { CreateJobObjectW(null(), null()) };
+    if handle.is_null() {
+        return Err(last_error("Cannot create priority job"));
+    }
+    let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
+    let mut limits: JOBOBJECT_BASIC_LIMIT_INFORMATION = unsafe { zeroed() };
+    limits.LimitFlags = JOB_OBJECT_LIMIT_PRIORITY_CLASS;
+    limits.PriorityClass = priority_class(priority);
+    if unsafe {
+        SetInformationJobObject(
+            handle.as_raw_handle(),
+            JobObjectBasicLimitInformation,
+            (&limits as *const JOBOBJECT_BASIC_LIMIT_INFORMATION).cast(),
+            size_of::<JOBOBJECT_BASIC_LIMIT_INFORMATION>() as u32,
+        )
+    } == 0
+    {
+        return Err(last_error("Cannot configure priority job"));
+    }
+    Ok(handle)
+}
+
+fn priority_class(priority: CpuPriority) -> u32 {
+    match priority {
+        CpuPriority::Low => IDLE_PRIORITY_CLASS,
+        CpuPriority::High => HIGH_PRIORITY_CLASS,
+    }
+}
+
+fn resume(
+    process: &OwnedHandle,
+    thread: &OwnedHandle,
+    job: Option<(&OwnedHandle, CpuPriority)>,
+) -> Result<bool, String> {
+    let job_failed = job.is_some_and(|(job, priority)| {
+        if unsafe { AssignProcessToJobObject(job.as_raw_handle(), process.as_raw_handle()) } == 0 {
+            log::warn!("{}", last_error("Cannot assign process to priority job"));
+            true
+        } else if unsafe { GetPriorityClass(process.as_raw_handle()) } != priority_class(priority) {
+            log::warn!("The process priority does not match the requested job priority");
+            true
+        } else {
+            false
+        }
+    });
+    if unsafe { ResumeThread(thread.as_raw_handle()) } != 1 {
+        let detail = last_error("Cannot resume the verified game");
+        if unsafe { TerminateProcess(process.as_raw_handle(), 1) } == 0 {
+            return Err(format!(
+                "{detail}; {}",
+                last_error("Cannot terminate suspended game")
+            ));
+        }
+        return Err(detail);
+    }
+    Ok(job_failed)
+}
+
+pub fn launch(
+    path: &Path,
+    directory: &Path,
+    priority: Option<CpuPriority>,
+) -> Result<bool, String> {
+    let job = match priority.map(priority_job).transpose() {
+        Ok(job) => job,
+        Err(detail) => {
+            log::warn!("{detail}");
+            launch(path, directory, None)?;
+            return Ok(true);
+        }
+    };
     let current = token(unsafe { GetCurrentProcess() }, TOKEN_QUERY)?;
     let current_unprivileged = is_unprivileged(current.as_raw_handle())?;
     let (parent, shell) = checked_shell(!current_unprivileged)?;
-    if current_unprivileged {
+    if current_unprivileged && job.is_none() {
         return std::process::Command::new(path)
             .current_dir(directory)
             .spawn()
-            .map(|_| ())
+            .map(|_| false)
             .map_err(|e| format!("Cannot start the game: {e}"));
+    }
+    if current_unprivileged {
+        let wide = |value: &OsStr| {
+            value
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect::<Vec<_>>()
+        };
+        let file = wide(path.as_os_str());
+        let mut command = vec![b'"' as u16];
+        command.extend(path.as_os_str().encode_wide());
+        command.extend([b'"' as u16, 0]);
+        let directory = wide(directory.as_os_str());
+        let mut startup: STARTUPINFOEXW = unsafe { zeroed() };
+        startup.StartupInfo.cb =
+            size_of::<windows_sys::Win32::System::Threading::STARTUPINFOW>() as u32;
+        let mut process: PROCESS_INFORMATION = unsafe { zeroed() };
+        if unsafe {
+            CreateProcessW(
+                file.as_ptr(),
+                command.as_mut_ptr(),
+                null(),
+                null(),
+                0,
+                CREATE_SUSPENDED,
+                null(),
+                directory.as_ptr(),
+                &startup.StartupInfo,
+                &mut process,
+            )
+        } == 0
+        {
+            return Err(last_error("Cannot start the game"));
+        }
+        let thread = unsafe { OwnedHandle::from_raw_handle(process.hThread) };
+        let process = unsafe { OwnedHandle::from_raw_handle(process.hProcess) };
+        return resume(&process, &thread, job.as_ref().zip(priority));
     }
     let mut environment = null_mut();
     if unsafe { CreateEnvironmentBlock(&mut environment, shell.as_raw_handle(), 0) } == 0 {
@@ -237,22 +414,12 @@ pub fn launch(path: &Path, directory: &Path) -> Result<(), String> {
         }
         return Err(format!("Game token verification failed: {detail}"));
     }
-    if unsafe { ResumeThread(thread.as_raw_handle()) } != 1 {
-        let detail = last_error("Cannot resume the verified game");
-        if unsafe { TerminateProcess(process.as_raw_handle(), 1) } == 0 {
-            return Err(format!(
-                "{detail}; {}",
-                last_error("Cannot terminate suspended game")
-            ));
-        }
-        return Err(detail);
-    }
-    Ok(())
+    resume(&process, &thread, job.as_ref().zip(priority))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::check_context;
+    use super::*;
 
     #[test]
     fn refuses_wrong_user_session_or_elevated_desktop() {
@@ -260,5 +427,121 @@ mod tests {
         assert!(check_context(false, true, true).is_err());
         assert!(check_context(true, false, true).is_err());
         assert!(check_context(true, true, false).is_err());
+    }
+
+    #[test]
+    #[ignore = "compiles and launches a disposable executable without the priority privilege"]
+    fn launch_warns_and_continues_without_priority_privilege() {
+        assert!(priority_job(CpuPriority::Low).is_err());
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("game.exe");
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("tests")
+            .join("fixtures")
+            .join("launch_dummy.rs");
+        assert!(
+            std::process::Command::new("rustc")
+                .arg(source)
+                .arg("-o")
+                .arg(&executable)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(launch(&executable, dir.path(), Some(CpuPriority::Low)).unwrap());
+        let marker = dir.path().join("launch-marker.txt");
+        for _ in 0..200 {
+            if marker.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(marker.exists());
+    }
+
+    #[test]
+    #[ignore = "compiles and launches disposable process trees"]
+    fn priority_job_applies_to_parent_and_child() {
+        use windows_sys::Win32::System::Threading::{
+            GetPriorityClass, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+            WaitForSingleObject,
+        };
+
+        struct Stop {
+            file: std::path::PathBuf,
+            process: Option<OwnedHandle>,
+        }
+        impl Drop for Stop {
+            fn drop(&mut self) {
+                if let Err(e) = std::fs::write(&self.file, b"stop") {
+                    eprintln!("Cannot stop disposable process tree: {e}");
+                }
+                if let Some(process) = &self.process {
+                    if unsafe { WaitForSingleObject(process.as_raw_handle(), 5000) } != 0 {
+                        eprintln!("Disposable process tree did not exit in time");
+                    }
+                }
+            }
+        }
+
+        for (priority, expected) in [
+            (CpuPriority::Low, IDLE_PRIORITY_CLASS),
+            (CpuPriority::High, HIGH_PRIORITY_CLASS),
+        ] {
+            drop(priority_job(priority).expect("priority job must be available"));
+            let dir = tempfile::tempdir().unwrap();
+            let mut stop = Stop {
+                file: dir.path().join("stop"),
+                process: None,
+            };
+            let executable = dir.path().join("tree.exe");
+            let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("tests")
+                .join("fixtures")
+                .join("priority_tree.rs");
+            assert!(
+                std::process::Command::new("rustc")
+                    .arg(source)
+                    .arg("-o")
+                    .arg(&executable)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            assert!(!launch(&executable, dir.path(), Some(priority)).unwrap());
+            let marker = dir.path().join("pids");
+            for _ in 0..200 {
+                if marker.exists() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            let pids = std::fs::read_to_string(marker).unwrap();
+            let pids: Vec<u32> = pids
+                .split_whitespace()
+                .map(|pid| pid.parse().unwrap())
+                .collect();
+            assert_eq!(pids.len(), 2);
+            for (index, pid) in pids.into_iter().enumerate() {
+                let process = unsafe {
+                    OpenProcess(
+                        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                        0,
+                        pid,
+                    )
+                };
+                assert!(!process.is_null());
+                let process = unsafe { OwnedHandle::from_raw_handle(process) };
+                assert_eq!(
+                    unsafe { GetPriorityClass(process.as_raw_handle()) },
+                    expected
+                );
+                if index == 0 {
+                    stop.process = Some(process);
+                }
+            }
+        }
     }
 }
