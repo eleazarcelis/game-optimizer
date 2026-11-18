@@ -11,9 +11,11 @@ import { Settings } from "./components/Settings";
 import { GlobalSettings } from "./components/GlobalSettings";
 import { ConfirmationDialog } from "./components/ConfirmationDialog";
 import { WindowControls } from "./components/WindowControls";
+import { DetectionDialog } from "./components/DetectionDialog";
+import type { DetectedSelection, DetectionResult, DetectionTarget } from "./detection";
 import { localizeError } from "./errors";
 import { launchWindowAction, setEntryWarnings, warningId, warningSuppressed, type EntryWarning, type WarningNotification } from "./entry-warnings";
-import { containsPath, initialState, isAppState, isExe, type AppState, type Language } from "./model";
+import { containsPath, initialState, isAppState, isExe, pathKey, type AppState, type Language } from "./model";
 import { dontShowAgainText, profileName, translate as t } from "./i18n";
 import { checkForUpdates, type UpdateStatus } from "./updates";
 import "./App.css";
@@ -48,6 +50,12 @@ function App() {
   const [pendingPaths, setPendingPaths] = useState<string[]>([]);
   const [chosenProfile, setChosenProfile] = useState("");
   const [busy, setBusy] = useState(false);
+  const [detecting, setDetecting] = useState(false);
+  const detectingRef = useRef(false);
+  const [detection, setDetection] = useState<DetectionResult>();
+  const [detectionError, setDetectionError] = useState("");
+  const [detectedSteam, setDetectedSteam] = useState<string | null>(null);
+  const [detectedGameCount, setDetectedGameCount] = useState<number | null>(null);
   const activePaths = useRef(new Set<string>());
   const launching = useRef(false);
   const [launchingPath, setLaunchingPath] = useState<string | null>(null);
@@ -179,7 +187,7 @@ function App() {
     if (!current) return;
     if (paths.some((path) => !isExe(path))) { setError(`INVALID_EXECUTABLE: ${t(current.language, "invalid")}`); return; }
     if (paths.some((path) => containsPath(current.executables, path)) ||
-        new Set(paths.map((path) => path.toLocaleLowerCase("en-US"))).size !== paths.length) {
+        new Set(paths.map(pathKey)).size !== paths.length) {
       setError(`DUPLICATE: ${t(current.language, "duplicate")}`); return;
     }
     setBusy(true);
@@ -207,6 +215,74 @@ function App() {
       const paths = await open({ multiple: true, filters: [{ name: "Windows executable", extensions: ["exe"] }] });
       if (paths?.length) await prepare(paths);
     } catch (e) { setError(errorText(stateRef.current?.language ?? "en", e)); }
+  }
+
+  async function detect(target: DetectionTarget) {
+    if (detectingRef.current) return;
+    detectingRef.current = true;
+    setDetecting(true);
+    setDetectionError("");
+    try {
+      const result = await invoke<DetectionResult>("detect_steam", { target });
+      if (target !== "games") setDetectedSteam(result.steam);
+      if (target !== "steam") {
+        const steamMissing = result.issues.some((issue) => issue.kind === "steam_missing");
+        setDetectedGameCount(steamMissing ? null : result.games.length);
+        if (steamMissing) setDetectedSteam(null);
+      }
+      setDetection(result);
+    } catch (error) {
+      showError(error);
+    } finally {
+      detectingRef.current = false;
+      setDetecting(false);
+    }
+  }
+
+  async function addDetected(selected: DetectedSelection[]) {
+    if (detectingRef.current || selected.length === 0) return;
+    detectingRef.current = true;
+    setDetecting(true);
+    setDetectionError("");
+    try {
+      await invoke<void>("validate_detected_executables", { paths: selected.map((entry) => entry.path) });
+      await ensureSaved();
+      const current = stateRef.current;
+      if (!current) {
+        setDetectionError(t("en", "errDataInvalid"));
+        return;
+      }
+      if (new Set(selected.map((entry) => pathKey(entry.path))).size !== selected.length
+        || selected.some((entry) => containsPath(current.executables, entry.path))) {
+        setDetectionError(t(current.language, "detectDuplicate"));
+        return;
+      }
+      const launcher = current.profiles.find((profile) => profile.builtIn === "launcher");
+      const game = current.profiles.find((profile) => profile.builtIn === "game");
+      const executables: AppState["executables"] = [];
+      for (const entry of selected) {
+        const profile = entry.kind === "steam" ? launcher : game;
+        if (!profile) {
+          setDetectionError(t(current.language, "detectMissingProfile"));
+          return;
+        }
+        executables.push({ path: entry.path, profileId: profile.id });
+      }
+      update({ ...current, executables: [...current.executables, ...executables] });
+      try {
+        await ensureSaved();
+        setDetection(undefined);
+      } catch (error) {
+        setDetectionError(errorText(current.language, error));
+        const latest = stateRef.current;
+        if (latest) update({ ...latest, executables: latest.executables.filter((entry) => !executables.some((added) => pathKey(added.path) === pathKey(entry.path))) });
+      }
+    } catch (error) {
+      setDetectionError(errorText(stateRef.current?.language ?? "en", error));
+    } finally {
+      detectingRef.current = false;
+      setDetecting(false);
+    }
   }
 
   async function launch(path: string, name: string) {
@@ -240,10 +316,11 @@ function App() {
   const warningNotification = currentWarning && <div className="toast toast-warning" role="status"><AlertCircle size={20}/><div className="toast-message scroll-panel"><strong>{t(lang, "warning")}</strong>{preferenceEntry && <p title={preferenceEntry.path}>{t(lang, "warningEntry")}: {preferenceEntry.name}</p>}<p style={{ whiteSpace: "pre-line" }}>{currentWarning.message}</p>{preferenceEntry && <label className="warning-preference"><input type="checkbox" disabled={warningSaving} checked={warningSuppressed(state, preferenceEntry)} onChange={(event) => void toggleWarning(preferenceEntry, event.target.checked)}/>{dontShowAgainText(lang, preferenceEntry.name)}</label>}</div><button className="icon-button" disabled={warningSaving} onClick={() => setWarnings((current) => current.slice(1))} title={t(lang, "close")} aria-label={t(lang, "close")}>×</button></div>;
   if (!state) return <><WindowControls language={lang} showError={showError}/><div className="loading">{loadFailed ? <div className="load-failed"><p>{t(lang, "dataUnavailable")}</p><button className="secondary" onClick={() => { setError(""); setLoadFailed(false); setLoadAttempt((attempt) => attempt + 1); }}>{t(lang, "retry")}</button></div> : <><LoaderCircle className="spin"/>{t(lang, "loading")}</>}</div>{errorNotification}{warningNotification}</>;
   return <><WindowControls language={lang} showError={showError}/><div className="app-shell"><Sidebar page={page} setPage={setPage} language={lang} showError={showError} />
-    <main className="content">{page === "library" ? <Library state={state} update={update} add={() => void addFromDialog()} launch={(path, name) => void launch(path, name)} launchingPath={launchingPath} confirmAction={confirmAction} ensureSaved={ensureSaved} showError={showError} showEntryWarning={showEntryWarning} resetEntryWarnings={resetEntryWarnings} warningSaving={warningSaving} activeOperations={activeOperations} claimOperation={claimOperation} releaseOperation={releaseOperation} /> : page === "settings" ? <Settings key={aboutRequest} initialTab={aboutRequest ? "about" : "general"} state={state} update={update} showError={setError} updateStatus={updateStatus} checkUpdates={() => void checkUpdates(false)}/> : <GlobalSettings state={state} update={update} confirmAction={confirmAction} ensureSaved={ensureSaved} showError={showError} activeOperations={activeOperations} launching={launchingPath !== null} claimOperation={claimOperation} releaseOperation={releaseOperation}/>}</main>
+    <main className="content">{page === "library" ? <Library state={state} update={update} add={() => void addFromDialog()} detect={() => void detect("all")} detecting={detecting} launch={(path, name) => void launch(path, name)} launchingPath={launchingPath} confirmAction={confirmAction} ensureSaved={ensureSaved} showError={showError} showEntryWarning={showEntryWarning} resetEntryWarnings={resetEntryWarnings} warningSaving={warningSaving} activeOperations={activeOperations} claimOperation={claimOperation} releaseOperation={releaseOperation} /> : page === "settings" ? <Settings key={aboutRequest} initialTab={aboutRequest ? "about" : "general"} state={state} update={update} showError={setError} updateStatus={updateStatus} checkUpdates={() => void checkUpdates(false)} detect={(target) => void detect(target)} detecting={detecting} detectedSteam={detectedSteam} detectedGameCount={detectedGameCount}/> : <GlobalSettings state={state} update={update} confirmAction={confirmAction} ensureSaved={ensureSaved} showError={showError} activeOperations={activeOperations} launching={launchingPath !== null} claimOperation={claimOperation} releaseOperation={releaseOperation}/>}</main>
     {busy && <div className="overlay"><div className="busy"><LoaderCircle className="spin"/>{t(lang, "loading")}</div></div>}
     {pendingPaths.length > 0 && <div className="overlay"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><h2 id="modal-title">{t(lang, "selectProfile")}</h2><p className="modal-path scroll-panel" tabIndex={0}>{pendingPaths.join(", ")}</p><select value={chosenProfile} onChange={(e) => setChosenProfile(e.target.value)}>{state.profiles.map((profile) => <option key={profile.id} value={profile.id}>{profileName(profile, lang)}</option>)}</select><div className="modal-actions"><button className="secondary" onClick={() => setPendingPaths([])}>{t(lang, "cancel")}</button><button className="primary" disabled={!chosenProfile} onClick={() => { update({ ...state, executables: [...state.executables, ...pendingPaths.map((path) => ({ path, profileId: chosenProfile }))] }); setPendingPaths([]); }}>{t(lang, "confirm")}</button></div></div></div>}
     {confirmation !== null && <ConfirmationDialog message={confirmation} language={lang} onDecision={finishConfirmation} />}
+    {detection && <DetectionDialog state={state} result={detection} saving={detecting} error={detectionError} cancel={() => setDetection(undefined)} add={(selected) => void addDetected(selected)} />}
     {updateNotification && updateStatus.kind === "available" && <div className="update-toast" role="status"><div><strong>{t(lang, "updateAvailable")} {updateStatus.tag}</strong><p>{t(lang, "updateNotice")}</p></div><button className="secondary" onClick={() => { setUpdateNotification(false); setAboutRequest((request) => request + 1); setPage("settings"); }}>{t(lang, "viewUpdate")}</button><button className="icon-button" aria-label={t(lang, "close")} onClick={() => setUpdateNotification(false)}>×</button></div>}
     {errorNotification}{warningNotification}
   </div></>;

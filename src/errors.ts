@@ -14,6 +14,7 @@ const codeKeys: Record<string, Key> = {
   RESTORE_FAILED: "errRestoreFailed", APPLY_FAILED: "errApplyFailed", SNAPSHOT_FAILED: "errApplyFailed", SNAPSHOT_INVALID: "errApplyFailed",
   DATA_TOO_LARGE: "errDataInvalid", DATA_INVALID: "errDataInvalid", LAUNCH_FAILED: "errLaunch", FOLDER_OPEN: "errFolder",
   RESET_INVALID: "errJournal", RESET_FINALIZE: "errRestoreFailed", ACTION_CHECK: "errRestoreFailed", UNKNOWN: "errUnknown",
+  DETECTION_TASK: "detectFailed",
 };
 const stepKeys: Record<string, Key> = {
   cpu: "cpu", gpu: "gpu", power: "power", gameMode: "gameMode", gameDvr: "gameDvr", "defender-path": "defenderFolder", "defender-process": "defenderProcess",

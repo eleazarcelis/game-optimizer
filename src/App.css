@@ -36,6 +36,7 @@ html,body,#root{width:100%;height:100%;overflow:hidden}
 .entry-grid,.entry-list{align-content:start}
 .settings-panel:not([hidden]){display:flex;flex-direction:column;flex:1;min-height:0}
 .settings-general{max-height:100%;margin-bottom:0;flex-shrink:1}
+.detection-actions{display:grid;gap:12px;margin-top:20px}.detection-action{display:flex;align-items:center;gap:14px;padding:14px;background:#1b2130;border:1px solid #30384a;border-radius:10px}.detection-icon{display:grid;place-items:center;flex:none;width:42px;height:42px;border-radius:10px;background:#292640;color:#c3b9ff}.detection-info{display:grid;gap:5px;flex:1;min-width:0;font-size:13px}.detection-added,.detection-count{display:inline-flex;align-items:center;gap:6px;color:#a6f1cd;font-size:12px}.detection-count{color:#aab4c7}.detection-actions>.field-description{margin:0;font-size:12px}
 .profile-layout{flex:1;min-height:0;align-items:start;grid-template-rows:minmax(0,1fr)}
 .profile-list,.profile-layout>.profile-editor{max-height:100%;min-width:0}
 .profile-list button{gap:12px;overflow-wrap:anywhere}
@@ -77,3 +78,5 @@ html,body,#root{width:100%;height:100%;overflow:hidden}
 @media(max-height:700px){.content{padding-top:24px;padding-bottom:24px}.page-header{margin-bottom:20px}.page-header h1{font-size:30px}.page>.notice{margin-bottom:16px}.settings-tabs{margin-bottom:16px}.profile-heading{margin-bottom:16px}}
 .toast.toast-warning{background:#2e2a1c;border-color:#8a7a3c;color:#f0dfa0}.toast.toast-warning:not(:only-of-type){bottom:140px}
 .warning-preference{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:12px;cursor:pointer}.warning-preference input{accent-color:#a99bff}
+.library-add-actions{display:flex;align-items:center;gap:8px}.detect-button{padding:11px}.detection-dialog{width:min(760px,95vw)}.detection-dialog h2{margin:0}.detection-dialog>p{font-size:13px;color:#c5cedd;line-height:1.5}.detection-results{overflow:auto;min-height:0;display:grid;gap:12px}.detection-game,.detection-steam{display:flex;gap:8px;padding:12px;background:#151a26;border:1px solid #363e50;border-radius:9px;font-size:13px}.detection-game{flex-direction:column}.detection-game select{width:100%;min-width:0}.detection-steam{align-items:flex-start}.detection-steam input{accent-color:#a99bff}.detection-steam small{display:block;color:#9aa5b7;overflow-wrap:anywhere;margin-top:4px}.detection-issues{color:#e5c688;font-size:12px;overflow-wrap:anywhere}.detection-issues ul{padding-left:20px}.detection-dialog .modal-actions{flex-shrink:0}
+.detection-error{color:#ffb1b8;font-size:13px;overflow-wrap:anywhere}

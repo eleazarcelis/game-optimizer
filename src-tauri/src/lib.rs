@@ -34,6 +34,8 @@ mod power;
 mod privileged;
 #[cfg(windows)]
 mod resource_identity;
+#[cfg(windows)]
+mod steam_detection;
 pub mod transaction;
 
 #[derive(Debug, Serialize)]
@@ -183,6 +185,27 @@ async fn executable_name(path: String) -> Result<Option<String>, AppError> {
     tauri::async_runtime::spawn_blocking(move || executable_name::read(&path))
         .await
         .map_err(|e| error("NAME_TASK", e))?
+}
+
+#[tauri::command]
+async fn detect_steam(
+    target: steam_detection::DetectionTarget,
+) -> Result<steam_detection::DetectionResult, AppError> {
+    tauri::async_runtime::spawn_blocking(move || steam_detection::detect(target))
+        .await
+        .map_err(|e| error("DETECTION_TASK", e))
+}
+
+#[tauri::command]
+async fn validate_detected_executables(paths: Vec<String>) -> Result<(), AppError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        for path in paths {
+            executable(&path)?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| error("DETECTION_TASK", e))?
 }
 
 #[tauri::command]
@@ -377,6 +400,8 @@ pub fn run() {
             save_state,
             inspect_executable,
             executable_name,
+            detect_steam,
+            validate_detected_executables,
             launch_executable,
             open_executable_folder,
             open_update_download,

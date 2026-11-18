@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ChevronDown, ChevronRight, FolderOpen, Gamepad2, GripVertical, LoaderCircle, MoreVertical, Play, Plus, RotateCcw, Star, Trash2, X, Zap } from "lucide-react";
+import { ChevronDown, ChevronRight, FolderOpen, Gamepad2, GripVertical, LoaderCircle, MoreVertical, Play, Plus, RotateCcw, Search, Star, Trash2, X, Zap } from "lucide-react";
 import type { AppState, Executable, Language, LibrarySort, ProfileActions } from "../model";
 import { availableProfileActions, fileName, profileChanged } from "../model";
 import { organizeLibrary, planLibraryMove, type LibraryEntry, type LibraryGroup } from "../library";
@@ -10,7 +10,7 @@ import { DismissibleNotice } from "./DismissibleNotice";
 import { warningId } from "../entry-warnings";
 
 type OperationProps = { activeOperations: string[]; claimOperation: (path: string) => boolean; releaseOperation: (path: string) => void };
-type Props = OperationProps & { state: AppState; update: (state: AppState) => void; add: () => void; launch: (path: string, name: string) => void; launchingPath: string | null; confirmAction: (message: string) => Promise<boolean>; ensureSaved: () => Promise<void>; showError: (error: unknown) => void; showEntryWarning: (path: string, name: string, id: string, message: string) => void; resetEntryWarnings: (path: string) => void; warningSaving: boolean };
+type Props = OperationProps & { state: AppState; update: (state: AppState) => void; add: () => void; detect: () => void; detecting: boolean; launch: (path: string, name: string) => void; launchingPath: string | null; confirmAction: (message: string) => Promise<boolean>; ensureSaved: () => Promise<void>; showError: (error: unknown) => void; showEntryWarning: (path: string, name: string, id: string, message: string) => void; resetEntryWarnings: (path: string) => void; warningSaving: boolean };
 type GpuStatus = { state: "none" | "applied" | "partial" | "defaults" | "recovery" | "conflict" | "unverified" | "resetCommit"; detail: string | null; appliedProfile: ProfileActions | null };
 type DragHandlers = Pick<React.HTMLAttributes<HTMLElement>, "onPointerDown" | "onPointerMove" | "onPointerUp" | "onPointerCancel" | "onLostPointerCapture">;
 function ExecutableIcon({ path, language, launch, disabled }: { path: string; language: Language; launch: () => void; disabled: boolean }) {
@@ -169,7 +169,7 @@ function Entry({ item, name, nameFailed, state, remove, favorite, dragHandle, dr
     </div>
   </article>;
 }
-export function Library({ state, update, confirmAction, add, launch, launchingPath, ensureSaved, showError, showEntryWarning, resetEntryWarnings, warningSaving, activeOperations, claimOperation, releaseOperation }: Props) {
+export function Library({ state, update, confirmAction, add, detect, detecting, launch, launchingPath, ensureSaved, showError, showEntryWarning, resetEntryWarnings, warningSaving, activeOperations, claimOperation, releaseOperation }: Props) {
   const lang: Language = state.language;
   const sort = state.librarySort ?? "manual";
   const [names, setNames] = useState<Record<string, { name?: string; failed: boolean }>>({});
@@ -318,7 +318,7 @@ export function Library({ state, update, confirmAction, add, launch, launchingPa
       dragHandlers={sort === "manual" ? dragHandlers([item.path], scope, !!item.favorite, false) : undefined}
       dropScope={sort === "manual" ? scope : undefined}/>;
   }
-  return <section className="page"><header className="page-header"><div><span className="eyebrow">GAME OPTIMIZER / {t(lang, "library").toUpperCase()}</span><h1>{t(lang, "title")}</h1><p>{t(lang, "subtitle")}</p></div><button className="primary" onClick={add}><Plus size={18}/>{t(lang, "add")}</button></header>
+  return <section className="page"><header className="page-header"><div><span className="eyebrow">GAME OPTIMIZER / {t(lang, "library").toUpperCase()}</span><h1>{t(lang, "title")}</h1><p>{t(lang, "subtitle")}</p></div><div className="library-add-actions"><button className="secondary detect-button" disabled={detecting} title={t(lang, detecting ? "detecting" : "detectShort")} aria-label={t(lang, detecting ? "detecting" : "detectShort")} onClick={detect}>{detecting ? <LoaderCircle className="spin" size={18}/> : <Search size={18}/>}</button><button className="primary" onClick={add}><Plus size={18}/>{t(lang, "add")}</button></div></header>
     {!state.libraryNoticeDismissed && <DismissibleNotice language={lang} dismiss={() => update({ ...state, libraryNoticeDismissed: true })}>{t(lang, "gpuPreview")}</DismissibleNotice>}
     <div className="toolbar"><span className="count">{state.executables.length} {t(lang, "library").toLowerCase()}</span><div className="toolbar-actions"><label>{t(lang, "sortLibrary")} <select value={sort} onChange={(event) => update({ ...state, librarySort: event.target.value as LibrarySort })}><option value="az">{t(lang, "sortAZ")}</option><option value="za">{t(lang, "sortZA")}</option><option value="manual">{t(lang, "sortManual")}</option></select></label><label className="group-toggle"><input type="checkbox" checked={!!state.groupByName} onChange={(event) => update({ ...state, groupByName: event.target.checked })}/>{t(lang, "groupNames")}</label></div></div>
     <div ref={library} className="library-items scroll-panel" tabIndex={0} role="region" aria-label={t(lang, "library")}>

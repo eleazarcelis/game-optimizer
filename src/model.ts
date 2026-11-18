@@ -48,7 +48,11 @@ export function initialState(): AppState {
 }
 
 export function containsPath(items: Executable[], path: string): boolean {
-  return items.some((item) => item.path.toLocaleLowerCase("en-US") === path.toLocaleLowerCase("en-US"));
+  return items.some((item) => pathKey(item.path) === pathKey(path));
+}
+
+export function pathKey(path: string): string {
+  return path.replace(/\//g, "\\").toLocaleLowerCase("en-US");
 }
 
 export function isExe(path: string): boolean {
