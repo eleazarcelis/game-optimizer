@@ -134,19 +134,76 @@ fn write_cpu(name: &str, value: &Option<RawValue>) -> Result<(), String> {
             )
             .map_err(|e| format!("Cannot write CPU priority: {e}"))
         }
-        None => {
-            let key =
-                match root.open_subkey_with_flags(path, KEY_READ | KEY_WRITE | KEY_WOW64_64KEY) {
-                    Ok(key) => key,
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-                    Err(e) => return Err(format!("Cannot open CPU priority key: {e}")),
-                };
-            match key.delete_value("CpuPriorityClass") {
-                Ok(()) => Ok(()),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                Err(e) => Err(format!("Cannot remove CPU priority: {e}")),
-            }
-        }
+        None => remove_cpu_priority(&root, IFEO, name),
+    }
+}
+
+fn key_is_empty(key: &RegKey) -> Result<bool, String> {
+    let info = key
+        .query_info()
+        .map_err(|e| format!("Cannot inspect registry key: {e}"))?;
+    Ok(info.sub_keys == 0 && info.values == 0)
+}
+
+/// Removes the image's `CpuPriorityClass` value. Applying a priority may have
+/// created the `PerfOptions` key and the image key, so afterwards each of them
+/// is removed only if it is completely empty (no values and no subkeys). A key
+/// that holds any other setting is never touched. Failing to remove an empty key
+/// is only logged: the priority itself was already removed and verified.
+fn remove_cpu_priority(root: &RegKey, base: &str, name: &str) -> Result<(), String> {
+    let image_path = format!(r"{base}\{name}");
+    let perf = match root.open_subkey_with_flags(
+        format!(r"{image_path}\PerfOptions"),
+        KEY_READ | KEY_WRITE | KEY_WOW64_64KEY,
+    ) {
+        Ok(key) => key,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("Cannot open CPU priority key: {e}")),
+    };
+    match perf.delete_value("CpuPriorityClass") {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("Cannot remove CPU priority: {e}")),
+    }
+    if let Err(e) = remove_empty_cpu_keys(root, base, name, perf) {
+        log::warn!("CPU priority removed, but empty registry keys remain: {e}");
+    }
+    Ok(())
+}
+
+fn remove_empty_cpu_keys(
+    root: &RegKey,
+    base: &str,
+    name: &str,
+    perf: RegKey,
+) -> Result<(), String> {
+    let flags = KEY_READ | KEY_WRITE | KEY_WOW64_64KEY;
+    let not_found = |e: &std::io::Error| e.kind() == std::io::ErrorKind::NotFound;
+    if !key_is_empty(&perf)? {
+        return Ok(());
+    }
+    drop(perf);
+    let image = match root.open_subkey_with_flags(format!(r"{base}\{name}"), flags) {
+        Ok(key) => key,
+        Err(e) if not_found(&e) => return Ok(()),
+        Err(e) => return Err(format!("Cannot open image key: {e}")),
+    };
+    match image.delete_subkey_with_flags("PerfOptions", KEY_WOW64_64KEY) {
+        Ok(()) => {}
+        Err(e) if not_found(&e) => {}
+        Err(e) => return Err(format!("Cannot remove PerfOptions key: {e}")),
+    }
+    if !key_is_empty(&image)? {
+        return Ok(());
+    }
+    drop(image);
+    let parent = root
+        .open_subkey_with_flags(base, flags)
+        .map_err(|e| format!("Cannot open image options key: {e}"))?;
+    match parent.delete_subkey_with_flags(name, KEY_WOW64_64KEY) {
+        Ok(()) => Ok(()),
+        Err(e) if not_found(&e) => Ok(()),
+        Err(e) => Err(format!("Cannot remove image key: {e}")),
     }
 }
 
@@ -531,6 +588,101 @@ mod tests {
         assert!(validate_name(r"game.exe\PerfOptions").is_err());
         assert!(validate_name("game.exe:bad").is_err());
         assert!(validate_name("game.exe\0").is_err());
+    }
+
+    // The following tests use a throwaway tree under HKEY_CURRENT_USER, so they
+    // need no elevation and never touch the real Image File Execution Options.
+    struct TestRegistry {
+        root: RegKey,
+        base: String,
+    }
+    impl TestRegistry {
+        fn new() -> Self {
+            let base = format!(r"Software\GameOptimizerTests\{}\IFEO", Uuid::new_v4());
+            let root = RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
+            root.create_subkey_with_flags(&base, KEY_READ | KEY_WRITE | KEY_WOW64_64KEY)
+                .unwrap();
+            Self { root, base }
+        }
+        fn path(&self, relative: &str) -> String {
+            if relative.is_empty() {
+                self.base.clone()
+            } else {
+                format!(r"{}\{relative}", self.base)
+            }
+        }
+        fn create(&self, relative: &str) -> RegKey {
+            self.root
+                .create_subkey_with_flags(
+                    self.path(relative),
+                    KEY_READ | KEY_WRITE | KEY_WOW64_64KEY,
+                )
+                .unwrap()
+                .0
+        }
+        fn exists(&self, relative: &str) -> bool {
+            self.root
+                .open_subkey_with_flags(self.path(relative), KEY_READ | KEY_WOW64_64KEY)
+                .is_ok()
+        }
+    }
+    impl Drop for TestRegistry {
+        fn drop(&mut self) {
+            let tree = self.base.rsplit_once('\\').unwrap().0.to_owned();
+            let _ = self.root.delete_subkey_all(tree);
+        }
+    }
+
+    #[test]
+    fn removing_cpu_priority_also_removes_the_keys_it_leaves_empty() {
+        let reg = TestRegistry::new();
+        reg.create(r"game.exe\PerfOptions")
+            .set_value("CpuPriorityClass", &3u32)
+            .unwrap();
+        reg.create(r"other.exe\PerfOptions")
+            .set_value("CpuPriorityClass", &1u32)
+            .unwrap();
+        remove_cpu_priority(&reg.root, &reg.base, "game.exe").unwrap();
+        assert!(!reg.exists(r"game.exe\PerfOptions"));
+        assert!(!reg.exists("game.exe"));
+        assert!(reg.exists("other.exe\\PerfOptions"));
+        assert!(reg.exists(""));
+    }
+
+    #[test]
+    fn removing_cpu_priority_keeps_perf_options_with_other_values() {
+        let reg = TestRegistry::new();
+        let perf = reg.create(r"game.exe\PerfOptions");
+        perf.set_value("CpuPriorityClass", &3u32).unwrap();
+        perf.set_value("IoPriority", &2u32).unwrap();
+        remove_cpu_priority(&reg.root, &reg.base, "game.exe").unwrap();
+        let perf = reg
+            .root
+            .open_subkey_with_flags(reg.path(r"game.exe\PerfOptions"), KEY_READ)
+            .unwrap();
+        assert!(perf.get_raw_value("CpuPriorityClass").is_err());
+        assert_eq!(perf.get_value::<u32, _>("IoPriority").unwrap(), 2);
+    }
+
+    #[test]
+    fn removing_cpu_priority_keeps_an_image_key_with_other_settings() {
+        let reg = TestRegistry::new();
+        reg.create(r"game.exe\PerfOptions")
+            .set_value("CpuPriorityClass", &3u32)
+            .unwrap();
+        reg.create("game.exe")
+            .set_value("GlobalFlag", &8u32)
+            .unwrap();
+        remove_cpu_priority(&reg.root, &reg.base, "game.exe").unwrap();
+        assert!(!reg.exists(r"game.exe\PerfOptions"));
+        assert!(reg.exists("game.exe"));
+    }
+
+    #[test]
+    fn removing_cpu_priority_without_keys_is_a_no_op() {
+        let reg = TestRegistry::new();
+        remove_cpu_priority(&reg.root, &reg.base, "missing.exe").unwrap();
+        assert!(reg.exists(""));
     }
 
     #[test]
