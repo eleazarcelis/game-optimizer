@@ -4,6 +4,8 @@ Español | [English](./README.md)
 
 Game Optimizer es una aplicación de escritorio para Windows que organiza juegos y ayuda a gestionar cómo se ejecutan sus procesos en Windows. Modifica ajustes seleccionados del sistema; **no cambia la configuración gráfica del juego**, como la resolución, la calidad visual o los efectos. Los resultados dependen del juego, el equipo y Windows; no se garantiza una mejora de rendimiento o FPS.
 
+**Enfoque en la estabilidad más que en los FPS.** En las pruebas del autor con juegos reales, el beneficio principal ha sido una entrega de fotogramas más consistente, con menos stuttering, más que un mayor promedio de FPS. Los ajustes que gestiona buscan reducir la interferencia de otros procesos y del sistema. El efecto varía según el juego, el equipo y Windows, y no está garantizado.
+
 > **Trabajo en curso:** la aplicación todavía no reemplaza todas las funciones de los scripts anteriores.
 
 ## Funcionalidades actuales
@@ -31,104 +33,22 @@ La apertura de carpetas y enlaces externos usa el shell de Windows desde la app 
 
 Los [scripts anteriores](./legacy-scripts/) son independientes de la aplicación de escritorio y tienen otros comportamientos y riesgos.
 
-## Detalles de implementación y recuperación
+## Verificar la descarga
 
-La app está construida con Tauri 2, React y TypeScript. La biblioteca, los perfiles y los diarios de transacciones se guardan en la carpeta de la aplicación dentro de `%LOCALAPPDATA%`; los logs usan el directorio de registros de Tauri para Windows. Reemplazar el ejecutable portátil en la misma cuenta de Windows no elimina esos archivos.
+Cada release incluye un archivo `.sha256` junto al ejecutable. Para comprobar que el archivo descargado coincide, ejecuta en PowerShell:
 
-Valores predefinidos elimina permanentemente los ajustes de CPU/GPU habilitados, incluidos los de una optimización activa, y descarta el respaldo correspondiente. Si se interrumpe, se conserva información para su recuperación. Las transacciones antiguas de valores predefinidos siguen pudiéndose restaurar o limpiar explícitamente.
+```powershell
+Get-FileHash -Algorithm SHA256 .\Game-Optimizer-<etiqueta>-windows-x64.exe
+```
 
-La restauración de Defender conserva las exclusiones preexistentes y verifica los cambios con elevación. Las exclusiones de carpetas superpuestas y las exclusiones de proceso para ejecutables con la misma identidad física se coordinan independientemente, incluso entre usuarios. Los diarios antiguos sin identidad del recurso requieren inspección manual. No muevas ni redirijas las carpetas o enlaces del ejecutable mientras se aplica o restaura una exclusión. Las reservas del equipo se guardan en `%PROGRAMDATA%\GameOptimizer\resources` y las nuevas reservas de Defender en `%PROGRAMDATA%\GameOptimizer-Defender-2739818f`; no las elimines mientras haya cambios activos. Restaura las transacciones antiguas de Defender antes de crear nuevas exclusiones. Estas reservas coordinan la aplicación, pero Windows u otros programas pueden modificar Defender por separado. Restaura las exclusiones independientes con esta versión o una posterior, no con una compilación anterior.
+Compara el resultado con el hash del archivo `.sha256`. Esto confirma que la descarga no se corrompió ni se alteró en el camino; por sí solo no identifica al editor, porque el ejecutable todavía no está firmado digitalmente.
 
-Si una restauración omite exclusiones de Defender modificadas externamente, la app libera su reserva sin cambiar esas exclusiones. Antes de aplicar otro perfil con Defender, también revisa diarios completados de versiones anteriores y libera reservas pendientes únicamente si ambas exclusiones están ausentes y las identidades de los recursos siguen coincidiendo.
+## Más documentación
 
-Las acciones globales modifican `AutoGameModeEnabled` y `GameDVR_Enabled` del usuario actual de Windows; su efectividad depende de Windows y de las directivas existentes. El diario guarda los valores y tipos anteriores antes de escribir. Tras una interrupción, usa Restaurar en ajustes globales; los cambios externos no se sobrescriben.
+- [Detalles de recuperación e implementación](./docs/recovery-ES.md): dónde se guardan los datos y las reservas, cómo funciona la restauración y sus límites conocidos.
+- [Desarrollo](./docs/development-ES.md): compilación, publicación de releases y pruebas reales opcionales.
 
 ## Licencia
 
 Game Optimizer se distribuye bajo la Licencia Pública General de GNU, versión 3 o, a tu elección, cualquier versión posterior (GPL-3.0-or-later). Consulta [LICENSE](./LICENSE). Las dependencias de terceros conservan sus propias licencias.
 
-## Desarrollo
-
-Requisitos: Windows, Node.js, Rust con toolchain MSVC, herramientas de compilación de Visual C++ y WebView2 Runtime.
-
-Si Cargo está instalado mediante rustup pero no se encuentra `cargo`, reinicia VS Code o añádelo a la sesión actual de PowerShell:
-
-```powershell
-$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
-cargo --version
-```
-
-Si `cargo --version` sigue fallando, instala Rust con rustup y vuelve a abrir la terminal.
-
-```powershell
-npm install
-npm run tauri dev
-```
-
-Para las pruebas del frontend ejecuta `npm test`; para las pruebas nativas, `cargo test --manifest-path src-tauri\Cargo.toml`.
-Las compilaciones de desarrollo no exigen elevación al iniciar y pueden solicitar permisos por separado para acciones privilegiadas; la versión de producción solicita administrador al iniciar.
-
-Para generar un ejecutable portable sin instalador:
-
-```powershell
-npm run tauri build -- --no-bundle
-```
-
-El ejecutable se genera en `src-tauri\target\release`. WebView2 Runtime debe estar instalado en el equipo de destino. Los datos permanecen en el equipo, no junto al ejecutable.
-
-## Publicar una release
-
-Cuando el workflow esté en la rama predeterminada, actualiza la versión en `package.json` y `package-lock.json` y publica una release de GitHub con una etiqueta coincidente como `v1.2.3` o `v1.2.3-rc.1` (no se admiten metadatos de compilación como `+build`). El workflow descarga esa etiqueta, verifica que coincida con `package.json`, compila un ejecutable portable para Windows x64 y adjunta `Game-Optimizer-<etiqueta>-windows-x64.exe` y `LICENSE` a la release. Tauri lee de `package.json` la versión mostrada en la app y los metadatos de versión del ejecutable; cada componente numérico debe ser como máximo 65535. Las releases en borrador se compilan al publicarlas. Si alguno de esos archivos ya existe, elimínalo antes de volver a ejecutar el workflow.
-
-Los pushes a `main` ejecutan la misma compilación y preparan la caché de dependencias de Rust para releases posteriores; no adjuntan archivos a ninguna release. La primera compilación o una compilación sin caché puede tardar más.
-
-## Prueba real de recuperación de GPU
-
-Esta prueba opcional cambia temporalmente la preferencia GPU del usuario actual **solo para la ruta del ejecutable descartable generado**. Simula un fallo después de escribir y luego restaura y verifica el valor anterior del registro. El archivo de registro no debe existir previamente. Conserva el directorio y el registro hasta comprobar la restauración.
-
-```powershell
-$id = [guid]::NewGuid().ToString('N')
-$dir = Join-Path $env:TEMP "GameOptimizerTest-$id"
-New-Item -ItemType Directory -Path $dir | Out-Null
-$env:GAME_OPTIMIZER_DUMMY_EXE = Join-Path $dir "dummy-$id.exe"
-$env:GAME_OPTIMIZER_TEST_JOURNAL = Join-Path $dir 'journal.json'
-rustc --edition 2021 tests\fixtures\dummy.rs -o $env:GAME_OPTIMIZER_DUMMY_EXE
-cargo test --manifest-path src-tauri\Cargo.toml real_dummy_gpu_preference_recovers_after_a_partial_failure -- --ignored --nocapture
-```
-
-Si se interrumpe o falla la restauración, conserva el mismo `GAME_OPTIMIZER_TEST_JOURNAL` y ejecuta:
-
-```powershell
-cargo test --manifest-path src-tauri\Cargo.toml recover_dummy_gpu_journal -- --ignored --nocapture
-```
-
-## Prueba real de Defender
-
-Esta prueba opcional requiere varias aprobaciones de UAC. Agrega temporalmente exclusiones para una carpeta nueva y un ejecutable descartable dentro de ella; después intenta restaurarlas y verifica el resultado. La exclusión de carpeta afecta a todos sus archivos mientras está activa, así que no guardes otros archivos allí. El diario se guarda en una carpeta separada.
-
-```powershell
-$id = [guid]::NewGuid().ToString('N')
-$dir = Join-Path $env:TEMP "GameOptimizerDefenderTest-$id"
-$dummyDir = Join-Path $dir 'dummy'
-New-Item -ItemType Directory -Path $dummyDir | Out-Null
-$env:GAME_OPTIMIZER_DUMMY_EXE = Join-Path $dummyDir "dummy-$id.exe"
-$env:GAME_OPTIMIZER_SERVICE_ROOT = Join-Path $dir 'journal'
-rustc --edition 2021 tests\fixtures\dummy.rs -o $env:GAME_OPTIMIZER_DUMMY_EXE
-if ($LASTEXITCODE -ne 0) { throw 'No se pudo compilar el ejecutable de prueba' }
-cargo build --manifest-path src-tauri\Cargo.toml
-if ($LASTEXITCODE -ne 0) { throw 'No se pudo compilar el asistente de administrador' }
-$env:GAME_OPTIMIZER_HELPER_EXE = (Resolve-Path src-tauri\target\debug\game-optimizer-app.exe).Path
-cargo test --manifest-path src-tauri\Cargo.toml real_dummy_coordinated_defender_profile_applies_and_restores -- --ignored --nocapture
-```
-
-Si la prueba se interrumpe o falla la restauración, conserva el directorio y el diario. Con los mismos valores de `GAME_OPTIMIZER_DUMMY_EXE`, `GAME_OPTIMIZER_SERVICE_ROOT` y `GAME_OPTIMIZER_HELPER_EXE`, intenta recuperar el diario:
-
-```powershell
-cargo test --manifest-path src-tauri\Cargo.toml recover_full_profile -- --ignored --nocapture
-```
-
-No elimines el directorio ni el diario hasta comprobar que las exclusiones se restauraron.
-
-## Pendiente
-
-Las instantáneas de Defender registran el volumen y el identificador de archivo de Windows. La restauración de CPU recupera el valor de prioridad, pero puede dejar claves IFEO vacías creadas al aplicar el ajuste. También faltan pruebas exhaustivas de interfaz e interrupciones.
