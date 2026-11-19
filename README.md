@@ -47,6 +47,7 @@ Compare the result with the hash in the `.sha256` file. This confirms the downlo
 
 - [Recovery and implementation details](./docs/recovery.md): where data and reservations are stored, how restoration works and known limits.
 - [Development](./docs/development.md): building, publishing releases and the opt-in real tests.
+- [Privacy policy](./docs/privacy.md): what the app sends over the network and what it stores locally.
 
 ## License
 

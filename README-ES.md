@@ -47,6 +47,7 @@ Compara el resultado con el hash del archivo `.sha256`. Esto confirma que la des
 
 - [Detalles de recuperación e implementación](./docs/recovery-ES.md): dónde se guardan los datos y las reservas, cómo funciona la restauración y sus límites conocidos.
 - [Desarrollo](./docs/development-ES.md): compilación, publicación de releases y pruebas reales opcionales.
+- [Política de privacidad](./docs/privacy-ES.md): qué envía la app por la red y qué guarda localmente.
 
 ## Licencia
 
